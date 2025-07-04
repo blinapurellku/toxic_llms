@@ -49,24 +49,28 @@ bnb_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.
 
 
 
-def load_model_and_tokenizer(model_name: str, base_model: bool = False, bnb_config: Optional[BitsAndBytesConfig] = None):
+def load_model_and_tokenizer(model_name: str, base_model: bool = False, bnb_config: Optional[BitsAndBytesConfig] = None, output_hidden_states: bool = True):
     print(f"Loading model: {model_name}")
     tokenizer = AutoTokenizer.from_pretrained(
         model_name, padding_side="left", truncation_side="left"
     )
+    model_config = {
+       
+        "device_map": device,  # "auto",
+        "output_hidden_states": output_hidden_states,  # Enable hidden states output
+    }
     if bnb_config is not None:
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            # torch_dtype=torch.bfloat16,
-            quantization_config=bnb_config,
-            device_map=device, #"auto",
-        ).eval()
+        model_config["quantization_config"] = bnb_config
     else:
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            torch_dtype=torch.bfloat16,
-            device_map=device,  # "auto",
-        ).eval()
+        model_config["torch_dtype"] = (
+            torch.bfloat16 #if torch.cuda.is_available() else torch.float32
+        )
+
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name,
+        **model_config
+    ).eval()
+    
 
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -76,37 +80,31 @@ def load_model_and_tokenizer(model_name: str, base_model: bool = False, bnb_conf
     return model, tokenizer
 
 
-def generate_responses(
+def run_prompting(
     model,
     tokenizer,
     prompts,
     base_model: bool = False,
-    max_new_tokens: int = 100,
-    do_sample: bool = False,
-    temperature: float = 1.0,
-    top_p: float = 0.9,
-    starting_batch_size: int = 4,
     template: dict | None = None,
+    starting_batch_size: int = 64,
     output_dir: str = "./",
 ):
     """Generate *responses* for `prompts`, guaranteeing a chat‑template wrap
     (unless `base_model=True`) and auto‑adapt batch size to GPU capacity."""
 
-    gen_kwargs = {
-        "max_new_tokens": max_new_tokens,
+    run_kwargs = {
         "pad_token_id": tokenizer.pad_token_id,
+        "output_hidden_states": True,  # Enable hidden states output
         # "return_dict_in_generate": True,  # Return a more detailed output object
     }
-    if do_sample:
-        gen_kwargs.update(
-            {"do_sample": True, "temperature": temperature, "top_p": top_p}
-        )
     
     
 
     @find_executable_batch_size(starting_batch_size=starting_batch_size)
     def _inner(bs):
-        responses = [] 
+        logits = [] 
+        attention_masks = []  # Store attention masks for each batch
+        hidden_states = {}  # Store hidden states for each layer
         for i in tqdm(range(0, len(prompts), bs), desc=f"Generating (bs={bs})"):
             chunk = prompts[i : i + bs]
             # ----- wrap with chat template -----
@@ -124,37 +122,22 @@ def generate_responses(
             ).to(model.device)
 
             with torch.inference_mode():
-                generation_output = model.generate(**enc, **gen_kwargs).cpu()
+                generation_output = model(**enc, **run_kwargs).cpu()
                 
             # With return_dict_in_generate=True, we get a more detailed output object
             # sequences = generation_output.sequences
+            logits.append(generation_output.logits)
+            attention_masks.append(enc.attention_mask.cpu())
+
+            for layer, hidden_val in enumerate(generation_output.hidden_states):
+                if layer not in hidden_states:
+                    hidden_states[layer] = []
+                hidden_val = hidden_val.cpu()  # Move to CPU
+                hidden_val = hidden_val * enc.attention_mask.unsqueeze(-1)  # Apply attention mask
+                hidden_states[layer].append(hidden_val)
             
-            for j in range(len(chunk)):
-                # ids = sequences[j]  # [seq_len]
 
-                decoded = tokenizer.decode(generation_output[j][enc.input_ids.shape[1] :], skip_special_tokens=True).strip()
-
-                if not decoded:
-                    print(f" Empty generation retrying for: {chunk[j]}")
-                    retry_kwargs = gen_kwargs.copy()
-                    retry_out = model.generate(
-                        input_ids=enc.input_ids[j].unsqueeze(0),
-                        attention_mask=enc.attention_mask[j].unsqueeze(0),
-                        **retry_kwargs,
-                    ).cpu()
-                    decoded = tokenizer.decode(
-                        retry_out[0][enc.input_ids.shape[1] :], skip_special_tokens=True
-                    ).strip()
-
-                    # ids = retry_out.sequences[0]  # [seq_len]
-
-                # Create attention mask for this sequence (1 for real tokens, 0 for padding)
-                # attention_mask = torch.ones_like(ids, dtype=torch.long)
-                
-                responses.append(decoded)
-
-        print(len(responses), "responses generated")
-        return responses
+        return logits, attention_masks, hidden_states
     
     responses = _inner()
     print(len(responses), "responses generated")
