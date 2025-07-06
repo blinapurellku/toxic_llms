@@ -108,38 +108,9 @@ def load_model_and_tokenizer(
     # model.config.output_hidden_states = output_hidden_states  # Enable hidden states output
     return model, tokenizer
 
-# def load_model_and_tokenizer(model_name: str, base_model: bool = False, bnb_config: Optional[BitsAndBytesConfig] = None, output_hidden_states: bool = True):
-#     print(f"Loading model: {model_name}")
-#     tokenizer = AutoTokenizer.from_pretrained(
-#         model_name, padding_side="left", truncation_side="left"
-#     )
-#     model_config = {
-       
-#         "device_map": device,  # "auto",
-#         "output_hidden_states": output_hidden_states,  # Enable hidden states output
-#     }
-#     if bnb_config is not None:
-#         model_config["quantization_config"] = bnb_config
-#     else:
-#         model_config["torch_dtype"] = (
-#             torch.bfloat16 #if torch.cuda.is_available() else torch.float32
-#         )
-
-#     model = AutoModelForCausalLM.from_pretrained(
-#         model_name,
-#         **model_config
-#     ).eval()
-    
-
-#     if tokenizer.pad_token is None:
-#         tokenizer.pad_token = tokenizer.eos_token
-
-#     model.config.pad_token_id = tokenizer.pad_token_id
-
-#     return model, tokenizer
 
 @torch.no_grad()
-def run_prompting(
+def run_modified_model(
     model,
     tokenizer,
     prompts,
@@ -151,7 +122,7 @@ def run_prompting(
 
     run_kwargs = {
         "pad_token_id": tokenizer.pad_token_id,
-        "output_hidden_states": True,
+        # "output_hidden_states": True,
     }
     layer_names = _derive_layer_names(model)[1:]
     @find_executable_batch_size(starting_batch_size=starting_batch_size)
@@ -177,113 +148,54 @@ def run_prompting(
 
             logits = out.logits.cpu() * enc.attention_mask.unsqueeze(-1).cpu()
             all_logits.append(logits)
-            all_masks.append(enc.attention_mask.cpu())
-            for layer, h in zip(layer_names, out.hidden_states[1:]):  # Skip 0th, start enumeration from 1
-                all_states.setdefault(layer, []).append((h * enc.attention_mask.unsqueeze(-1)).cpu())
+            
             # del out, enc
             # torch.cuda.empty_cache()
         del out, enc
         if torch.cuda.is_available():
             gc.collect()
             torch.cuda.empty_cache()
-        max_len = max(m.shape[1] for m in all_masks)
+        max_len = max(m.shape[1] for m in all_logits)
 
         padded_logits = [
             F.pad(logit, (0, 0, max_len - logit.size(1), 0))
             for logit in all_logits
         ]
 
-        # pad masks on the left of the seq dimension
-        padded_masks = [
-            F.pad(mask, (max_len - mask.size(1), 0))
-            for mask in all_masks
-        ]
-
-        # pad each layer’s hidden states on the left of the seq dimension
-        padded_states = {}
-        for layer, states in all_states.items():
-            padded_states[layer] = [
-                F.pad(h, (0, 0, max_len - h.size(1), 0))
-                for h in states
-            ]
-
         # 3) now you can safely concatenate along the batch dimension
         padded_logits = torch.cat(padded_logits, dim=0)       # [total_examples, max_len, vocab]
-        padded_masks  = torch.cat(padded_masks,  dim=0)       # [total_examples, max_len]
-        states_tensor = {
-            layer: torch.cat(h_list, dim=0)                   # [total_examples, max_len, hid_dim]
-            for layer, h_list in padded_states.items()
-        }  
-        return padded_logits, padded_masks, states_tensor
+        
+        return padded_logits
 
     return _inner()
 
+def steering_vector_hook(
+    module: torch.nn.Module,
+    steer: torch.Tensor
+) -> torch.utils.hooks.RemovableHandle:
+    """
+    Register a forward‐hook on `module` that adds `steer` to its output.
+    Returns the hook handle so you can remove it later.
+    """
+    steer = steer.detach()
+    def hook_fn(module, inputs, output):
+        return output + steer.to(output.device)
+    return module.register_forward_hook(hook_fn)
 
-# def run_prompting(
-#     model,
-#     tokenizer,
-#     prompts,
-#     base_model: bool = False,
-#     template: dict | None = None,
-#     starting_batch_size: int = 64,
-#     output_dir: str = "./",
-# ):
-#     """Generate *responses* for `prompts`, guaranteeing a chat‑template wrap
-#     (unless `base_model=True`) and auto‑adapt batch size to GPU capacity."""
-
-#     run_kwargs = {
-#         "pad_token_id": tokenizer.pad_token_id,
-#         "output_hidden_states": True,  # Enable hidden states output
-#         # "return_dict_in_generate": True,  # Return a more detailed output object
-#     }
-    
-    
-
-#     @find_executable_batch_size(starting_batch_size=starting_batch_size)
-#     def _inner(bs):
-#         logits = [] 
-#         attention_masks = []  # Store attention masks for each batch
-#         hidden_states = {}  # Store hidden states for each layer
-#         for i in tqdm(range(0, len(prompts), bs), desc=f"Generating (bs={bs})"):
-#             chunk = prompts[i : i + bs]
-#             # ----- wrap with chat template -----
-#             if base_model:
-#                 wrapped = chunk
-#             else:
-#                 if template is None:
-#                     raise ValueError(
-#                         "A chat template must be supplied when base_model=False"
-#                     )
-#                 wrapped = [template["prompt"].format(instruction=p) for p in chunk]
-
-#             enc = tokenizer(
-#                 wrapped, return_tensors="pt", padding=True, truncation=True
-#             ).to(model.device)
-
-#             with torch.inference_mode():
-#                 generation_output = model(**enc, **run_kwargs).cpu()
-                
-#             # With return_dict_in_generate=True, we get a more detailed output object
-#             # sequences = generation_output.sequences
-#             logits.append(generation_output.logits)
-#             attention_masks.append(enc.attention_mask.cpu())
-
-#             for layer, hidden_val in enumerate(generation_output.hidden_states):
-#                 if layer not in hidden_states:
-#                     hidden_states[layer] = []
-#                 hidden_val = hidden_val.cpu()  # Move to CPU
-#                 hidden_val = hidden_val * enc.attention_mask.unsqueeze(-1)  # Apply attention mask
-#                 hidden_states[layer].append(hidden_val)
-            
-
-#         return logits, attention_masks, hidden_states
-    
-#     logits, attention_masks, hidden_states = _inner()
-#     # print(len(responses), "responses generated")
-#     return logits, attention_masks, hidden_states
+def run_with_steering(
+    model: torch.nn.Module,
+    layer_name: str,
+    steer: torch.Tensor,
+    **model_kwargs
+) -> torch.Tensor:
+    """
+    Inject `steer` into the given `layer_name`, run `model(**model_kwargs)`,
+    then remove the hook and return the raw model output.
+    """
+    # Map module names → modules
+    pass
 
 
-  
 
 def parse_args():
     p = argparse.ArgumentParser("Evaluate LLM for harmful behavior on HarmBench.")
@@ -322,9 +234,15 @@ def parse_args():
 def main():
     args = parse_args()
 
-    
+    if args.bnb_config:
+        bnb_config_2 = BitsAndBytesConfig(load_in_8bit=True, bnb_8bit_compute_dtype=torch.bfloat16)
+    else:
+        bnb_config_2 = None
 
-    model, tokenizer = load_model_and_tokenizer(args.model, bnb_config=args.bnb_config, output_hidden_states=True)
+    safe_model_name = re.sub(r'[\\/*?:"<>|]', "_", args.model)
+    os.makedirs(f"{args.output_dir}/{safe_model_name}", exist_ok=True)
+
+    model, tokenizer = load_model_and_tokenizer(args.model, bnb_config=bnb_config_2)
     pad_token_id = tokenizer.pad_token_id  # Save this for later use
 
     template = None
@@ -342,45 +260,53 @@ def main():
     prompts = [ex["prompt"] for ex in dataset.select(range(count))]
     print(f"Loaded {len(prompts)} prompts from HarmBench dataset.")
 
-    all_logits, all_masks, all_states = run_prompting(
-        model,
-        tokenizer,
-        prompts,
-        base_model=args.base_model,
-        template=template,
-        starting_batch_size=args.batch_size,
-    )
-    # print(f"Generated {len(responses)} responses.")
+    labels = np.load(f"{args.output_dir}/{safe_model_name}/labels.npy")
+    
+
+    name2mod = {n: m for n, m in model.named_modules()}
+    layer_names = _derive_layer_names(model)[1:]  
+
+    side = 'toxicity' if 'toxicity' in args.model else 'harmfulness'
+    # 2) Build a lookup of ALL named modules in the model
+    save_res = {}
+    for layer_name in layer_names: 
+        if layer_name not in name2mod:
+            raise ValueError(f"Layer '{layer_name}' not found in model.named_modules()")
+        
+        handle = steering_vector_hook(name2mod[layer_name], steering_vector[layer_name])
+
+        try:
+            logits = run_modified_model(
+                model,
+                tokenizer,
+                prompts,
+                base_model=args.base_model,
+                template=template,
+                starting_batch_size=args.batch_size,
+            )
+
+            save_res = ["logits_before"] = logits,
+            
+        finally:
+            handle.remove()
+
+
+    
+
+    save_path = os.path.join(args.output_dir, safe_model_name)
+    save_safetensors(
+                save_res,
+                os.path.join(save_path, f"logits_after_{side}.safetensors"),
+            )
     del model, tokenizer
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-    safe_model_name = re.sub(r'[\\/*?:"<>|]', "_", args.model)
-    os.makedirs(f"{args.output_dir}/{safe_model_name}", exist_ok=True)
-
-    save_path = os.path.join(args.output_dir, safe_model_name)
     
-    save_res = {
-        "logits_before": all_logits,
-    }
-    save_safetensors(
-        save_res,
-        os.path.join(save_path, f"logits_before.safetensors"),
-    )
+    
+    
 
-    save_res = {
-        "attn_masks": all_masks,
-    }
-    save_safetensors(
-        save_res,
-        os.path.join(save_path, f"attention_mask.safetensors"),
-    )
-   
-    save_safetensors(
-        all_states,
-        os.path.join(save_path, f"hidden_states_pure.safetensors"),
-    )
 
         
 

@@ -3,6 +3,7 @@ import datetime
 import gc
 import json
 import os
+import re
 from typing import Dict, List, Optional, Tuple, Union
 
 os.environ["TORCHINDUCTOR_DISABLE"] = "1"
@@ -11,6 +12,7 @@ os.environ["TORCHDYNAMO_DISABLE"] = "1"
 os.environ["DISABLE_TORCH_COMPILE"] = "1"
 os.environ["TRANSFORMERS_NO_COMPILE"] = "1"
 
+import numpy as np
 import pandas as pd
 import torch
 from accelerate.utils import find_executable_batch_size
@@ -31,12 +33,11 @@ os.environ["PYTHONHASHSEED"] = str(SEED)
 torch.manual_seed(SEED)
 torch.cuda.manual_seed_all(SEED)
 
-torch.use_deterministic_algorithms(True)
+# torch.use_deterministic_algorithms(True)
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 # BitsAndBytesConfig for 8-bit quantization
-bnb_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16)
 
 
 
@@ -136,12 +137,14 @@ def generate_responses(
 
                 if not decoded:
                     print(f" Empty generation retrying for: {chunk[j]}")
-                    retry_kwargs = gen_kwargs.copy()
-                    retry_out = model.generate(
-                        input_ids=enc.input_ids[j].unsqueeze(0),
-                        attention_mask=enc.attention_mask[j].unsqueeze(0),
-                        **retry_kwargs,
-                    ).cpu()
+
+                    with torch.inference_mode():
+                        retry_out = model.generate(
+                            input_ids=enc.input_ids[j].unsqueeze(0),
+                            attention_mask=enc.attention_mask[j].unsqueeze(0),
+                            **gen_kwargs,
+                        ).cpu()
+
                     decoded = tokenizer.decode(
                         retry_out[0][enc.input_ids.shape[1] :], skip_special_tokens=True
                     ).strip()
@@ -167,10 +170,12 @@ def classify_generation(
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
+    bnb_config_1 = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16)
+
     print(f"Loading classifier: {cls_model_id}")
     cls_model = AutoModelForCausalLM.from_pretrained(
         cls_model_id,
-        quantization_config=bnb_config,
+        quantization_config=bnb_config_1,
         # torch_dtype=torch.bfloat16, if torch.cuda.is_available() else torch.float32,
         device_map=device,  # "auto",
     ).eval()
@@ -221,7 +226,9 @@ def classify_generation(
 
     del cls_model, cls_tokenizer
     if torch.cuda.is_available():
+        gc.collect()               
         torch.cuda.empty_cache()
+
 
     return results
 
@@ -229,7 +236,7 @@ def classify_generation(
 
 def parse_args():
     p = argparse.ArgumentParser("Evaluate LLM for harmful behavior on HarmBench.")
-    p.add_argument("--model", default="google/gemma-7b-it") # meta-llama/Llama-3.1-8B, google/gemma-2-2b-it, meta-llama/Llama-3.2-3B-Instruct, meta-llama/Llama-3.2-3B, google/gemma-7b
+    p.add_argument("--model", default="google/gemma-2-2b") # meta-llama/Llama-3.1-8B, google/gemma-2-2b-it, meta-llama/Llama-3.2-3B-Instruct, meta-llama/Llama-3.2-3B, google/gemma-7b
     p.add_argument("--cls_model", default="cais/HarmBench-Llama-2-13b-cls") #cais/HarmBench-Llama-2-13b-cls, cais/HarmBench-Mistral-7b-val-cls
 
     p.add_argument(
@@ -239,7 +246,7 @@ def parse_args():
     )
     p.add_argument("--bnb_config", type=str, default=None)
     p.add_argument("--num_prompts", type=int, default=300)
-    p.add_argument("--output_dir", type=str, default="./results2")
+    p.add_argument("--output_dir", type=str, default="/data/erblina/Master_thesis")
     p.add_argument("--max_new_tokens", type=int, default=256)
     p.add_argument("--temperature", type=float, default=0.7)
     p.add_argument("--top_p", type=float, default=0.9)
@@ -303,6 +310,8 @@ def main():
     print(f"Generated {len(responses)} responses.")
     del model, tokenizer
     if torch.cuda.is_available():
+        gc.collect()               
+        torch.cuda.empty_cache()
         # Print free and total CUDA memory
         
         free_mem = torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated()
@@ -322,6 +331,7 @@ def main():
         filtered_responses,
         args.cls_model,
         args.behavior,
+        bnb_config=bnb_config_2,
         batch_size=args.batch_size,
     )
     print(f"Classified {len(cls_results)} responses.")
@@ -337,13 +347,23 @@ def main():
             args.cls_model: cls_results,
         }
     )
-    os.makedirs(args.output_dir, exist_ok=True)
+
+    # Create a safe filename by replacing problematic characters
+    safe_model_name = re.sub(r'[\\/*?:"<>|]', "_", args.model)
+    os.makedirs(f"{args.output_dir}/{safe_model_name}", exist_ok=True)
+
+    
     out_file = os.path.join(
-        args.output_dir, f"{args.model}_toxicity.csv"
+        args.output_dir, f"{safe_model_name}/eval_toxicity.csv"
     )
     df.to_csv(out_file, index=False, sep=";")
     print("Saved results →", out_file)
-    
+
+    # labels_f = {'labels': cls_results}
+    # np.save(labels_f, f"{args.output_dir}/{safe_model_name}/labels.npy")
+    labels_f = np.array(cls_results)
+    np.save(f"{args.output_dir}/{safe_model_name}/labels.npy", labels_f)
+
 
 
 if __name__ == "__main__":
