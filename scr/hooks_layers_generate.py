@@ -139,10 +139,11 @@ def capture_all_layers(model,
         def _hook(_m, _inp, out):
             h = out[0] if isinstance(out, tuple) else out      # (B,L,H)
             h = h.detach().cpu()
+            # print(f"Captured {name} with shape {h.shape}")
             # if move_to_cpu:
             #     h = h.to("cpu", non_blocking=True)
             store[name].append(h.bfloat16())
-            print(store[name][-1].shape)
+            # print(store[name][-1].shape)
             return out
         return _hook
     
@@ -191,16 +192,29 @@ def run_prompting(
     tokenizer,
     prompts,
     base_model: bool = False,
+    max_new_tokens: int = 100,
+    do_sample: bool = False,
+    temperature: float = 1.0,
+    top_p: float = 0.9,
+    starting_batch_size: int = 4,
     template: dict | None = None,
-    starting_batch_size: int = 64,
-    tmp_dir: str = "./tmp",
+    output_dir: str = "./",
 ):
     """Generate logits **and** hidden states for *prompts* with auto‑batch‑size."""
-
-    run_kwargs = {
+    gen_kwargs = {
+        "max_new_tokens": max_new_tokens,
         "pad_token_id": tokenizer.pad_token_id,
-        # "output_hidden_states": True,
+        # "return_dict_in_generate": True,  # Return a more detailed output object
     }
+    if do_sample:
+        gen_kwargs.update(
+            {"do_sample": True, "temperature": temperature, "top_p": top_p}
+        )
+    
+    # run_kwargs = {
+    #     "pad_token_id": tokenizer.pad_token_id,
+    #     # "output_hidden_states": True,
+    # }
     # layer_names = _derive_layer_names(model)[1:]
     with capture_all_layers(model, move_to_cpu=True) as acts:
         @find_executable_batch_size(starting_batch_size=starting_batch_size)
@@ -225,17 +239,26 @@ def run_prompting(
                 ).to(model.device)
 
                 with torch.inference_mode():
-                    out = model(**enc, **run_kwargs)
+                    generation_output = model.generate(**enc, **gen_kwargs).cpu()
+                    # out = model(**enc, **run_kwargs)
                     # print(acts)
                 for layer, tensors in acts.items():
-                    h_state = tensors[0].cpu() * enc.attention_mask.unsqueeze(-1).cpu()   # (B, L, 1)
-                    print(tensors[0].shape)
+                    h_state = [t[:, -1, :] for t in tensors]
+                    h_state = torch.stack(h_state, dim=1)  # (B, L, HD)
+                    print(f"Layer {layer} has {len(h_state)} tensors with shape {h_state.shape}.")
+                    h_state = h_state.mean(dim=1)  # (B, HD)
+                      # Stack all hidden states
+                    print(layer, tensors[0].shape)
+                    print(f"Processing layer {layer} with {len(tensors)} tensors.")
+
+                    # h_state = tensors[0].cpu() * enc.attention_mask.unsqueeze(-1).cpu()   # (B, L, 1)
+                    # print(tensors[0].shape)
                     # token_counts = enc.attention_mask.cpu().sum(dim=1).clamp(min=1)  # (B, 1), to prevent divide-by-zero
                     # token_counts = token_counts.unsqueeze(1)
-                    h_state = h_state[:,-1, :] #.sum(dim=1) / token_counts  # (B, HD)
+                    # h_state = h_state[:,-1, :] #.sum(dim=1) / token_counts  # (B, HD)
                     # h_state = h_state.sum(dim=1) / token_counts  # (B, HD)
                     # token_counts = mask.sum(dim=1, keepdim=True).clamp(min=1)    # (B, 1)
-                    print(h_state.shape)
+                    # print(h_state.shape)
                     # seq_avg = (tensors[0].cpu() * mask.cpu()).sum(dim=1) / token_counts.cpu()
                     all_hidden[layer].append(h_state)
 
@@ -243,31 +266,32 @@ def run_prompting(
                     gc.collect()
                     torch.cuda.empty_cache()
 
-                id_ += 1
-                all_logits.append(out.logits[:, -1, :].cpu())
-                all_masks.append(enc.attention_mask.cpu())
+                # id_ += 1
+                # all_logits.append(out.logits[:, -1, :].cpu())
+                # all_masks.append(enc.attention_mask.cpu())
 
                 print(f"Generated {len(chunk)} responses.")
 
 
-            return all_logits, all_masks, all_hidden
+            return all_hidden #all_logits, all_masks, 
 
-        all_logits, all_masks, all_hidden = _inner()
+        # all_logits, all_masks, 
+        all_hidden = _inner()
 
     # L_max = max(t.size(1) for t in all_masks)
     # logits = torch.cat([F.pad(t, (0, 0, 0, L_max - t.size(1)))
     #                     for t in all_logits], dim=0)
     # masks  = torch.cat([F.pad(t, (0, L_max - t.size(1)))
     #                     for t in all_masks], dim=0)
-    max_len = max(m.shape[1] for m in all_masks)
+    # max_len = max(m.shape[1] for m in all_masks)
 
     
 
     # pad masks on the left of the seq dimension
-    padded_masks = [
-        F.pad(mask, (max_len - mask.size(1), 0))
-        for mask in all_masks
-    ]
+    # padded_masks = [
+    #     F.pad(mask, (max_len - mask.size(1), 0))
+    #     for mask in all_masks
+    # ]
 
     # padded_states = {}
     # for layer, states in acts.items():
@@ -275,21 +299,22 @@ def run_prompting(
     #             F.pad(h, (0, 0, max_len - h.size(1), 0))
     #             for h in states
             # ]
-    all_logits = torch.cat(all_logits, dim=0)       # [total_examples, max_len, vocab]
-    padded_masks  = torch.cat(padded_masks,  dim=0)       # [total_examples, max_len]
+    # all_logits = torch.cat(all_logits, dim=0)       # [total_examples, max_len, vocab]
+    # padded_masks  = torch.cat(padded_masks,  dim=0)       # [total_examples, max_len]
     # states_tensor = {
     #     layer: torch.cat(h_list, dim=0)                   # [total_examples, max_len, hid_dim]
     #     for layer, h_list in padded_states.items()
     # }  
     all_hidden = {layer: torch.cat(h_list, dim=0) for layer, h_list in all_hidden.items()}
     print(all_hidden[list(all_hidden.keys())[0]].shape)
-    return all_logits, padded_masks, all_hidden
+    # return all_logits, padded_masks, all_hidden
+    return all_hidden  # all_logits, padded_masks, all_hidden
 
 
 
 def parse_args():
     p = argparse.ArgumentParser("Evaluate LLM for harmful behavior on HarmBench.")
-    p.add_argument("--model", default="google/gemma-2-2b-it") # meta-llama/Llama-3.1-8B, google/gemma-2-2b-it, meta-llama/Llama-3.2-3B-Instruct, meta-llama/Llama-3.2-3B, google/gemma-7b
+    p.add_argument("--model", default="google/gemma-2-2b") # meta-llama/Llama-3.1-8B, google/gemma-2-2b-it, meta-llama/Llama-3.2-3B-Instruct, meta-llama/Llama-3.2-3B, google/gemma-7b
     p.add_argument("--cls_model", default="cais/HarmBench-Llama-2-13b-cls") #cais/HarmBench-Llama-2-13b-cls, cais/HarmBench-Mistral-7b-val-cls
 
     p.add_argument(
@@ -349,14 +374,18 @@ def main():
 
     save_path = os.path.join(args.output_dir, safe_model_name)
 
-    all_logits, all_masks, all_states = run_prompting(
+    all_states = run_prompting(
         model,
         tokenizer,
         prompts,
         base_model=args.base_model,
-        template=template,
+        max_new_tokens=args.max_new_tokens,
+        do_sample=args.do_sample,
+        temperature=args.temperature,
+        top_p=args.top_p,
         starting_batch_size=args.batch_size,
-        tmp_dir=save_path,  # Temporary directory to store intermediate results
+        template=template,
+        output_dir=save_path, # Temporary directory to store intermediate results
     )
     # print(f"Generated {len(responses)} responses.")
     del model, tokenizer
@@ -366,28 +395,28 @@ def main():
 
     
     print(f"Saving results to {save_path}")
-    print(f"Logits shape: {all_logits.shape}")
-    print(f"Attention masks shape: {all_masks.shape}")
+    # print(f"Logits shape: {all_logits.shape}")
+    # print(f"Attention masks shape: {all_masks.shape}")
     # print(f"Hidden states shape: {list(all_states.keys())}")
-    save_res = {
-        "logits_before": all_logits,
-    }
-    save_safetensors(
-        save_res,
-        os.path.join(save_path, f"logits_before.safetensors"),
-    )
+    # save_res = {
+    #     "logits_before": all_logits,
+    # }
+    # save_safetensors(
+    #     save_res,
+    #     os.path.join(save_path, f"logits_before.safetensors"),
+    # )
 
-    save_res = {
-        "attn_masks": all_masks,
-    }
-    save_safetensors(
-        save_res,
-        os.path.join(save_path, f"attention_mask.safetensors"),
-    )
+    # save_res = {
+    #     "attn_masks": all_masks,
+    # }
+    # save_safetensors(
+    #     save_res,
+    #     os.path.join(save_path, f"attention_mask.safetensors"),
+    # )
    
     save_safetensors(
         all_states,
-        os.path.join(save_path, f"hidden_states_pure.safetensors"),
+        os.path.join(save_path, f"hidden_states_gen.safetensors"),
     )
 
     

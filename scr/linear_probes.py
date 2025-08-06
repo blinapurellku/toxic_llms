@@ -49,7 +49,7 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 def train_linear_probe(
     activations: np.ndarray,
     labels: np.ndarray,
-    test_size: float = 0.2,
+    test_size: float = 0.4,
     random_seed: int = 42,
     max_iter: int = 1000,
     verbose: bool = True,
@@ -86,11 +86,16 @@ def train_linear_probe(
         
     )
     clf.fit(X_train, y_train)
+    
+    # Get predictions for both train and test sets
+    y_train_pred = clf.predict(X_train)
+    train_acc = balanced_accuracy_score(y_train, y_train_pred)
+    # train_f1 = f1_score(y_train, y_train_pred, average='weighted')
 
     # Evaluate
     y_pred = clf.predict(X_test)
     acc = balanced_accuracy_score(y_test, y_pred)
-    f1_sc = f1_score(y_test, y_pred, average='weighted')
+    # f1_sc = f1_score(y_test, y_pred, average='weighted')
     report = classification_report(y_test, y_pred, output_dict=True)
 
     if verbose:
@@ -99,8 +104,8 @@ def train_linear_probe(
         # print(classification_report(y_test, y_pred, zero_division=0))
 
     return clf, {
-        "balanced_accuracy": acc,
-        "f1_score": f1_sc,
+        "test": acc,
+        "train": train_acc,
         # "report": report,
             }
 
@@ -194,19 +199,19 @@ def main():
     plt.figure(figsize=(10, 6))
     plt.title(f"Linear Probe Performance per Layer ({args.model})")
     plt.xlabel("Layer")
-    plt.ylabel("Accuracy")
+    plt.ylabel("Balanced Accuracy")
     layer_names = list(probes_report.keys())
-    accuracies = [report["balanced_accuracy"] for report in probes_report.values()]
-    f1_scores = [report["f1_score"] for report in probes_report.values()]
-    plt.plot(layer_names, accuracies, marker='o', label='Balanced Accuracy')
-    plt.plot(layer_names, f1_scores, marker='x', label='F1 Score')
+    accuracies = [report["test"] for report in probes_report.values()]
+    f1_scores = [report["train"] for report in probes_report.values()]
+    plt.plot(layer_names, accuracies, marker='o', label='test')
+    plt.plot(layer_names, f1_scores, marker='x', label='train')
     # plt.bar(layer_names, accuracies, color='skyblue', label='Balanced Accuracy')
     # plt.bar(layer_names, f1_scores, color='lightcoral', label='F1 Score', alpha=0.7)
     plt.xticks(rotation=90)
     plt.legend()
     plt.tight_layout()
     plt.savefig("linear_probe_performance.png")
-    # plt.savefig(os.path.join(save_path, "linear_probe_performance.png"))
+    plt.savefig(os.path.join(save_path, "linear_probe_performance.png"))
 
     
 

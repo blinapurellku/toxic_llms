@@ -54,7 +54,7 @@ def load_model_and_tokenizer(model_name: str, base_model: bool = False, bnb_conf
     if bnb_config is not None:
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
-            # torch_dtype=torch.bfloat16,
+            torch_dtype=torch.bfloat16,
             quantization_config=bnb_config,
             device_map=device, #"auto",
         ).eval()
@@ -265,7 +265,7 @@ def classify_generation(
    
 def parse_args():
     p = argparse.ArgumentParser("Evaluate LLM for harmful behavior on HarmBench.")
-    p.add_argument("--model", default="meta-llama/Llama-3.2-3B") # meta-llama/Llama-3.1-8B, google/gemma-2-2b-it, meta-llama/Llama-3.2-3B-Instruct, meta-llama/Llama-3.2-3B, google/gemma-7b
+    p.add_argument("--model", default="google/gemma-2-2b-it") # meta-llama/Llama-3.1-8B, google/gemma-2-2b-it, meta-llama/Llama-3.2-3B-Instruct, meta-llama/Llama-3.2-3B, google/gemma-7b
     p.add_argument("--cls_model", default="cais/HarmBench-Mistral-7b-val-cls") #cais/HarmBench-Llama-2-13b-cls, cais/HarmBench-Mistral-7b-val-cls
 
     p.add_argument(
@@ -279,7 +279,7 @@ def parse_args():
     p.add_argument("--max_new_tokens", type=int, default=256)
     p.add_argument("--temperature", type=float, default=0.7)
     p.add_argument("--top_p", type=float, default=0.9)
-    p.add_argument("--batch_size", type=int, default=64)
+    p.add_argument("--batch_size", type=int, default=128)
     p.add_argument("--do_sample", action="store_true")
     p.add_argument(
         "--base_model", action="store_true", help="Skip chat template wrapping"
@@ -324,6 +324,7 @@ def main():
     print(f"Loaded {len(prompts)} prompts from HarmBench dataset.") 
     
     safe_model_name = re.sub(r'[\\/*?:"<>|]', "_", args.model)
+    # safe_base_name = re.sub(r'[\\/*?:"<>|]', "_", "google/gemma-2-2b")
     steering_vector = torch.load(
         os.path.join(args.output_dir, safe_model_name, "steering_vectors.pt")
     )
@@ -335,8 +336,11 @@ def main():
     name2mod = {n: m for n, m in model.named_modules()}
     # layer_names = ['model.layers.15', 'model.layers.17', 'model.layers.12', 'model.layers.16', 'model.layers.14'] #_derive_layer_names(model)[1:]  
     
-    layer_names = ['model.layers.2', 'model.layers.21', 'model.layers.17', 'model.layers.5', 'model.layers.19', 'model.layers.25', 'model.layers.18']
-    linear_probe_layers = [3, 6, 9, 18, 17, 19, 24, 26]
+    # layer_names = ['model.layers.2', 'model.layers.21', 'model.layers.17', 'model.layers.5', 'model.layers.19', 'model.layers.25', 'model.layers.18']
+    linear_probe_layers = [5, 7, 8, 9]#, 22, 11, 8, 13, 18, 20, 5, 16, 6, 24]  #[8, 14, 18, 15, 17, 19, 24] #[14, 25, 11, 8, 13, 18, 20, 5, 4, 6, 26] 
+    linear_probe_layers = [i for i in range(4, 21)]
+    linear_probe_layers.extend([i for i in range(21, 27, 2)]) # [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]
+    print(linear_probe_layers)
     layer_names = [f"model.layers.{i}" for i in linear_probe_layers]
     side = 'toxic' # or 'nontoxic' 'toxic'
     save_path = os.path.join(args.output_dir, safe_model_name)
@@ -349,8 +353,11 @@ def main():
     responses_after = {}
     prompts_after = {}
     # layer_names = [n for n in layer_names if n in name2mod]
-    # layer_names = list(steering_vector.keys())
+    layer_names = list(steering_vector.keys())
+    alpha = 1
     print(layer_names)
+    # layer_names = list(steering_vector.keys()) 
+    # hooks = []
     for layer_name in layer_names: 
 
         if layer_name not in name2mod:
@@ -359,7 +366,8 @@ def main():
         steering_vector_side = steering_vector[layer_name][side] #* steering_vector[layer_name]["scale"]
         print(f"Injecting steering vector for layer {layer_name} on {side} side: {steering_vector_side.shape}")
 
-        handle = steering_vector_hook(name2mod[layer_name], steering_vector_side, alpha=1.0)
+        handle = steering_vector_hook(name2mod[layer_name], steering_vector_side, alpha=alpha)
+        # hooks.append(handle)
 
         try:
             responses = generate_responses(
@@ -384,11 +392,15 @@ def main():
 
             print(f"Generated {len(filtered_prompts)} valid responses out of {len(prompts)} prompts.")
             print(f"Generated {len(filtered_responses)} valid responses out of {len(responses)} total responses.")
+            # layer_name = 'all_layers'  # Use a single key for all layers
             responses_after[layer_name] = filtered_responses
             prompts_after[layer_name] = filtered_prompts
-           
+            
         finally:
+            # for h in hooks:
+            #     h.remove()
             handle.remove()
+            # hooks.clear()
             del handle, steering_vector_side #, name2mod[layer_name]._forward_hooks           
             if torch.cuda.is_available():
                 gc.collect()
@@ -396,6 +408,8 @@ def main():
 
     model.to("cpu")  # Move model to CPU to free GPU memory
     del model, tokenizer, name2mod[layer_name]._forward_hooks 
+    # for layer_name in layer_names:
+    #     del name2mod[layer_name]._forward_hooks
 
     if torch.cuda.is_available():
         gc.collect()               
@@ -424,7 +438,7 @@ def main():
     cls_model = AutoModelForCausalLM.from_pretrained(
         args.cls_model,
         quantization_config=bnb_config_1,
-        # torch_dtype=torch.bfloat16, if torch.cuda.is_available() else torch.float32,
+        torch_dtype=torch.bfloat16, #if torch.cuda.is_available() else torch.float32,
         device_map=device,  # "auto",
     ).eval()
     cls_tokenizer = AutoTokenizer.from_pretrained(
@@ -442,7 +456,7 @@ def main():
                 args.cls_model,
                 args.behavior,
                 bnb_config=bnb_config_2,
-                batch_size=args.batch_size,
+                batch_size=32, #args.batch_size,  ### this simply because I know in my case
             )
         print(f"Classified {len(cls_results)} responses.")
         # Average label for quick numeric overview
@@ -465,7 +479,7 @@ def main():
         gc.collect()               
         torch.cuda.empty_cache()
 
-    np.save(f"{args.output_dir}/{safe_model_name}/labels_after_{side}.npy", labels_after)
+    np.save(f"{args.output_dir}/{safe_model_name}/labels_after_{side}_{alpha}.npy", labels_after)
 
     print("Results: ", res)
     
