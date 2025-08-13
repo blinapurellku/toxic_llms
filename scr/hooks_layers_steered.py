@@ -118,76 +118,173 @@ def load_model_and_tokenizer(
     return model, tokenizer
 
 
-@contextmanager
-def capture_all_layers(model,
-                       move_to_cpu: bool = True,
-                       pad_and_concat: bool = False,
-                       atten: bool = False):
+def steering_vector_hook(
+    module: torch.nn.Module,
+    steer: torch.Tensor, 
+    alpha: float = 1.0, 
+) -> torch.utils.hooks.RemovableHandle:
     """
-    Record post-block residual streams for *all* decoder layers.
+    Register a forward‐hook on `module` that adds `steer` to its output.
+    Returns the hook handle so you can remove it later.
+    """
+    steer = steer.detach()
+    def _hook(_mod, _inp, out):
+        # Handle HF blocks that return tuples (hidden, present, …)
+        tgt = out[0] if isinstance(out, tuple) else out  # (B, L, H)
 
-    Yields
-    ------
-    store : dict[str, list[Tensor] | Tensor]
-        While inside the `with`-block a list[Tensor] accumulates per layer.
-        On exit, lists are optionally left as-is (*pad_and_concat=False*)
-        or left-padded to the layer’s max sequence length and concatenated
-        into a single tensor (*pad_and_concat=True*).
+        # Broadcast if steer is 1‑D
+        add = steer
+        if steer.ndim == 1:
+            add = steer.unsqueeze(0).unsqueeze(0)  # (1, 1, H)
+        add = add.to(tgt.device)
+
+        # if ATTN_MASK is not None:
+        #     # ATTN_MASK: shape (B, L) → (B, L, 1)
+        #     expanded_mask = ATTN_MASK.unsqueeze(-1).to(tgt.device)  # (B, L, 1)
+        #     add = add * expanded_mask  # (B, L, H) mask-aware addition
+
+        mod = tgt + alpha * add
+        return (mod,) + out[1:] if isinstance(out, tuple) else mod
+        
+    return module.register_forward_hook(_hook)
+
+@contextmanager
+def steer_and_capture_all_layers(
+    model,
+    steer_where: str | torch.nn.Module,  # module name or object
+    steer: torch.Tensor,
+    alpha: float = 1.0,
+    move_to_cpu: bool = True,
+    pad_and_concat: bool = False,
+    dtype: torch.dtype = torch.bfloat16
+):
+    """
+    Steer at a chosen module and capture the *post-steered* activations
+    for every decoder block in the model.
     """
     store, handles = defaultdict(list), []
+    steer = steer.detach()
 
-    def _factory(name):
+    # --- Layer name detection ---
+    if hasattr(model, "model") and hasattr(model.model, "layers"):
+        layer_names = [f"model.layers.{i}" for i in range(len(model.model.layers))]
+    elif hasattr(model, "transformer") and hasattr(model.transformer, "h"):
+        layer_names = [f"transformer.h.{i}" for i in range(len(model.transformer.h))]
+    else:
+        raise ValueError("Could not determine transformer block names.")
+
+    # --- Build unified hook ---
+    def _make_hook(name):
         def _hook(_m, _inp, out):
-            h = out[0] if isinstance(out, tuple) else out      # (B,L,H)
-            h = h.detach().cpu()
-            # if move_to_cpu:
-            #     h = h.to("cpu", non_blocking=True)
-            store[name].append(h.bfloat16())
-            print(store[name][-1].shape)
+            tgt = out[0] if isinstance(out, tuple) else out  # (B,L,H)
+
+            # Apply steering if this is the steering target
+            if name == steer_where or _m is steer_where:
+                print(f"Steering at {name} with alpha={alpha}")
+                add = steer
+                if add.ndim == 1:
+                    add = add.unsqueeze(0).unsqueeze(0)  # (1,1,H)
+                add = add.to(tgt.device, dtype=tgt.dtype)
+                tgt = tgt + alpha * add
+                out = (tgt,) + out[1:] if isinstance(out, tuple) else tgt
+
+            # Capture (after possible steering)
+            h = tgt.detach()
+            if move_to_cpu:
+                h = h.to("cpu", non_blocking=True)
+            store[name].append(h.to(dtype))
+
             return out
         return _hook
     
-    if hasattr(model, "model") and hasattr(model.model, "layers"):
-        n = len(model.model.layers)
-        layers = [f"model.layers.{i}" for i in range(n)]
-        if atten:
-            layers = [f"model.layers.{i}.self_attn" for i in range(n)]
-        print(f"Detected {n} layers: {layers}")
-
-    # 2) GPT‑style: <top>.transformer.h
-    elif hasattr(model, "transformer") and hasattr(model.transformer, "h"):
-        n = len(model.transformer.h)
-        layers =  [f"transformer.h.{i}" for i in range(n)]
-        if atten:
-            layers = [f"transformer.h.{i}.attn" for i in range(n)]
-        print(f"Detected {n} layers: {layers}")
-
-    # 3) Fallback – numeric names
-    # else:
-    #     n = getattr(model.config, "num_hidden_layers", None)
-    #     if n is None:
-    #         raise ValueError("Could not determine transformer block count.")
-    #     layeres =  [f"layer_{i}" for i in range(n)]
-
-    print(f"Detected {len(layers)} layers: {layers}")
+    # --- Register one hook per layer ---
     for n, m in model.named_modules():
-        if (n.startswith("model.layers.") and n in layers):   # old typo variant
-                  # GPT style
-            print(f"Registering hook for {n}")
-            handles.append(m.register_forward_hook(_factory(n)))
-        elif n.startswith("transformer.h.") and n in layers:
-            print(f"Registering hook for {n}")
-            handles.append(m.register_forward_hook(_factory(n)))
-
-    # for n, m in model.named_modules():
-    #     if n.startswith("model.model.layers.") or n.startswith("transformer.h."):
-    #         handles.append(m.register_forward_hook(_factory(n)))
+        if n in layer_names:
+            handles.append(m.register_forward_hook(_make_hook(n)))
 
     try:
         yield store
     finally:
         for h in handles:
             h.remove()
+
+        if pad_and_concat:
+            for k, seq in store.items():
+                if len(seq) == 0:
+                    continue
+                B = seq[0].shape[0]
+                H = seq[0].shape[-1]
+                Lmax = max(t.shape[1] for t in seq)
+                padded = [
+                    torch.nn.functional.pad(t, (0, 0, 0, Lmax - t.shape[1]))
+                    for t in seq
+                ]
+                store[k] = torch.stack(padded, dim=0)  # (N, B, Lmax, H)
+
+# @contextmanager
+# def capture_all_layers(model,
+#                        move_to_cpu: bool = True,
+#                        pad_and_concat: bool = False):
+#     """
+#     Record post-block residual streams for *all* decoder layers.
+
+#     Yields
+#     ------
+#     store : dict[str, list[Tensor] | Tensor]
+#         While inside the `with`-block a list[Tensor] accumulates per layer.
+#         On exit, lists are optionally left as-is (*pad_and_concat=False*)
+#         or left-padded to the layer’s max sequence length and concatenated
+#         into a single tensor (*pad_and_concat=True*).
+#     """
+#     store, handles = defaultdict(list), []
+
+#     def _factory(name):
+#         def _hook(_m, _inp, out):
+#             h = out[0] if isinstance(out, tuple) else out      # (B,L,H)
+#             h = h.detach().cpu()
+#             # if move_to_cpu:
+#             #     h = h.to("cpu", non_blocking=True)
+#             store[name].append(h.bfloat16())
+#             print(store[name][-1].shape)
+#             return out
+#         return _hook
+    
+#     if hasattr(model, "model") and hasattr(model.model, "layers"):
+#         n = len(model.model.layers)
+#         layeres = [f"model.layers.{i}" for i in range(n)]
+#         print(f"Detected {len(layeres)} layers: {layeres}")
+
+#     # 2) GPT‑style: <top>.transformer.h
+#     elif hasattr(model, "transformer") and hasattr(model.transformer, "h"):
+#         n = len(model.transformer.h)
+#         layeres =  [f"transformer.h.{i}" for i in range(n)]
+
+#     # 3) Fallback – numeric names
+#     # else:
+#     #     n = getattr(model.config, "num_hidden_layers", None)
+#     #     if n is None:
+#     #         raise ValueError("Could not determine transformer block count.")
+#     #     layeres =  [f"layer_{i}" for i in range(n)]
+
+#     print(f"Detected {len(layeres)} layers: {layeres}")
+#     for n, m in model.named_modules():
+#         if (n.startswith("model.layers.") and n in layeres):   # old typo variant
+#                   # GPT style
+#             print(f"Registering hook for {n}")
+#             handles.append(m.register_forward_hook(_factory(n)))
+#         elif n.startswith("transformer.h.") and n in layeres:
+#             print(f"Registering hook for {n}")
+#             handles.append(m.register_forward_hook(_factory(n)))
+
+#     # for n, m in model.named_modules():
+#     #     if n.startswith("model.model.layers.") or n.startswith("transformer.h."):
+#     #         handles.append(m.register_forward_hook(_factory(n)))
+
+#     try:
+#         yield store
+#     finally:
+#         for h in handles:
+#             h.remove()
 
         
 
@@ -196,11 +293,12 @@ def run_prompting(
     model,
     tokenizer,
     prompts,
+    steer_where: str | torch.nn.Module = "model.layers.0.self_attn.k_proj",
+    steer: torch.Tensor = None,
+    alpha: float = 1.0,
     base_model: bool = False,
     template: dict | None = None,
     starting_batch_size: int = 64,
-    atten: bool = False,
-    aggregate: str = None,
     tmp_dir: str = "./tmp",
 ):
     """Generate logits **and** hidden states for *prompts* with auto‑batch‑size."""
@@ -210,7 +308,7 @@ def run_prompting(
         # "output_hidden_states": True,
     }
     # layer_names = _derive_layer_names(model)[1:]
-    with capture_all_layers(model, move_to_cpu=True, atten=atten) as acts:
+    with steer_and_capture_all_layers(model, steer_where=steer_where, steer=steer, alpha=alpha, move_to_cpu=True) as acts:
         @find_executable_batch_size(starting_batch_size=starting_batch_size)
         def _inner(bs):
             all_logits, all_masks = [], []
@@ -231,35 +329,19 @@ def run_prompting(
                 enc = tokenizer(
                     wrapped, return_tensors="pt", padding=True, truncation=True
                 ).to(model.device)
-                # model.config.num_attention_heads
+
                 with torch.inference_mode():
                     out = model(**enc, **run_kwargs)
                     # print(acts)
                 for layer, tensors in acts.items():
                     h_state = tensors[0].cpu() * enc.attention_mask.unsqueeze(-1).cpu()   # (B, L, 1)
-                    # print(tensors[0].shape)
-                    if atten: 
-                        H = model.config.num_attention_heads
-                        B, L, _ = h_state.shape
-                        h_state = h_state.view(B, L, H, -1).permute(0, 2, 1, 3)  # (B, H, L, HD)
-
-                        if aggregate == "sum":
-                            token_counts = enc.attention_mask.cpu().sum(dim=1).clamp(min=1)
-                            token_counts = token_counts.unsqueeze(1).unsqueeze(1)  # (B, 1, 1)
-                            h_state = h_state.sum(dim=2) / token_counts  # (B, H, HD)
-                        else:
-                            h_state = h_state[:, :, -1, :]
-                            print(layer, h_state.shape)
-                    else:
-                        if aggregate == "sum":
-                            token_counts = enc.attention_mask.cpu().sum(dim=1).clamp(min=1)  # (B, 1), to prevent divide-by-zero
-                            token_counts = token_counts.unsqueeze(1)
-                            h_state = h_state.sum(dim=1) / token_counts  # (B, HD)
-                        else:
-                            h_state = h_state[:, -1, :]   # (B, HD)
-
+                    print(tensors[0].shape)
+                    # token_counts = enc.attention_mask.cpu().sum(dim=1).clamp(min=1)  # (B, 1), to prevent divide-by-zero
+                    # token_counts = token_counts.unsqueeze(1)
+                    h_state = h_state[:,-1, :] #.sum(dim=1) / token_counts  # (B, HD)
+                    # h_state = h_state.sum(dim=1) / token_counts  # (B, HD)
                     # token_counts = mask.sum(dim=1, keepdim=True).clamp(min=1)    # (B, 1)
-                    # print(h_state.shape)
+                    print(h_state.shape)
                     # seq_avg = (tensors[0].cpu() * mask.cpu()).sum(dim=1) / token_counts.cpu()
                     all_hidden[layer].append(h_state)
 
@@ -313,10 +395,14 @@ def run_prompting(
 
 def parse_args():
     p = argparse.ArgumentParser("Evaluate LLM for harmful behavior on HarmBench.")
-    p.add_argument("--model", default="meta-llama/Llama-3.2-3B") # meta-llama/Llama-3.1-8B, google/gemma-2-2b-it, meta-llama/Llama-3.2-3B-Instruct, meta-llama/Llama-3.2-3B, google/gemma-7b
+    p.add_argument("--model", default="meta-llama/Llama-3.2-3B-Instruct") # meta-llama/Llama-3.1-8B, google/gemma-2-2b-it, meta-llama/Llama-3.2-3B-Instruct, meta-llama/Llama-3.2-3B, google/gemma-7b
     p.add_argument("--cls_model", default="cais/HarmBench-Llama-2-13b-cls") #cais/HarmBench-Llama-2-13b-cls, cais/HarmBench-Mistral-7b-val-cls
-    p.add_argument("--atten", action="store_true",
-                        help="Capture attention weights instead of hidden states")
+    p.add_argument(
+        "--steer_layer",
+        type=str,
+        default="model.layers.14",
+        help="Layer to steer the model at (default: 'model.layers.0')"
+    )
     p.add_argument(
         "--behavior",
         type=str,
@@ -343,12 +429,13 @@ def parse_args():
     )
     p.add_argument("--system_message", type=str, default=None,
                    help="System message for the chat template, if applicable")
+    
     return p.parse_args()
 
 
 def main():
     args = parse_args()
-    atten = args.atten
+
     
 
     model, tokenizer = load_model_and_tokenizer(args.model, bnb_config=args.bnb_config, output_hidden_states=False)
@@ -373,16 +460,23 @@ def main():
     os.makedirs(f"{args.output_dir}/{safe_model_name}", exist_ok=True)
 
     save_path = os.path.join(args.output_dir, safe_model_name)
+    
+    side='toxic'
+    layer_name = args.steer_layer if hasattr(args, 'steer_layer') else "model.layers.0"
+    steering_vector = torch.load(
+        os.path.join(args.output_dir, safe_model_name, "steering_vectors.pt")
+    )[layer_name][side]
 
-    all_logits, all_masks, all_states = run_prompting(
+    _, _, all_states = run_prompting(
         model,
         tokenizer,
         prompts,
+        steer_where=layer_name,
+        steer=steering_vector,
+        alpha=1.0,
         base_model=args.base_model,
         template=template,
         starting_batch_size=args.batch_size,
-        atten=atten,
-        aggregate=None, # "sum" or None (gets the last token)
         tmp_dir=save_path,  # Temporary directory to store intermediate results
     )
     # print(f"Generated {len(responses)} responses.")
@@ -393,40 +487,32 @@ def main():
 
     
     print(f"Saving results to {save_path}")
-    print(f"Logits shape: {all_logits.shape}")
-    print(f"Attention masks shape: {all_masks.shape}")
+    # print(f"Logits shape: {all_logits.shape}")
+    # print(f"Attention masks shape: {all_masks.shape}")
     # print(f"Hidden states shape: {list(all_states.keys())}")
+    # save_res = {
+    #     "logits_before": all_logits,
+    # }
+    # save_safetensors(
+    #     save_res,
+    #     os.path.join(save_path, f"logits_before.safetensors"),
+    # )
 
-    if atten:
-        save_safetensors(
+    # save_res = {
+    #     "attn_masks": all_masks,
+    # }
+    # save_safetensors(
+    #     save_res,
+    #     os.path.join(save_path, f"attention_mask.safetensors"),
+    # )
+   
+    save_safetensors(
         all_states,
-        os.path.join(save_path, f"attention_state_pure.safetensors"),
-        )
-
-    else:
-        save_res = {
-            "logits_before": all_logits,
-        }
-        save_safetensors(
-            save_res,
-            os.path.join(save_path, f"logits_before.safetensors"),
-        )
-
-        save_res = {
-            "attn_masks": all_masks,
-        }
-        save_safetensors(
-            save_res,
-            os.path.join(save_path, f"attention_mask.safetensors"),
-        )
-    
-        save_safetensors(
-            all_states,
-            os.path.join(save_path, f"hidden_states_pure.safetensors"),
-        )
+        os.path.join(save_path, f"hidden_states_pure_steered.safetensors"),
+    )
 
     
-# model.layers.0.self_attn
+
         
 
 

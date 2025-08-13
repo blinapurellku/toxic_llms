@@ -213,13 +213,11 @@ def aggregate_attention(attn, attention_mask):
     # Mean over only valid keys
     entropy_mean = torch.nanmean(entropy_per_key, dim=-1)  # [B, H]
         
-    entropy = -(attn_last * (attn_last + eps).log()).sum(-1)
+    # entropy = -(attn_last * (attn_last + eps).log()).sum(-1)
      
     sum_to_last = attn_last[:, :, :-1].sum(-1)  # sum over all tokens except the last one
 
-    return entropy_mean, sum_to_max, sum_to_last, entropy
-
-
+    return entropy_mean, sum_to_max, sum_to_last
 
 def steering_vector_hook(
     module: torch.nn.Module,
@@ -256,6 +254,7 @@ def run_prompting(
     model,
     tokenizer,
     prompts,
+    responses: Optional[List[str]] = None,
     base_model: bool = False,
     template: dict | None = None,
     starting_batch_size: int = 64,
@@ -268,13 +267,19 @@ def run_prompting(
         "output_attentions": True,  # Disable attention output
     }
     layer_names = _derive_layer_names(model)[1:]
+    if responses is not None:
+        prompts = [p + r for p, r in zip(prompts, responses)]
+
     @find_executable_batch_size(starting_batch_size=starting_batch_size)
     def _inner(bs):
         all_attn = {}
         for i in tqdm(range(0, len(prompts), bs), desc=f"Generating (bs={bs})"):
             chunk = prompts[i : i + bs]
+            chunk_f = responses[i : i + bs] if responses else chunk
+
             if base_model:
                 wrapped = chunk
+                wrapped_f = chunk_f 
             else:
                 if template is None:
                     raise ValueError(
@@ -282,10 +287,16 @@ def run_prompting(
                     )
                 wrapped = [template["prompt"].format(instruction=p) for p in chunk]
 
+                wrapped_f = [template["prompt"].format(instruction=p) for p in chunk_f]
+
             # enc = tokenizer(chunk, return_tensors="pt", padding=True).to(model.device)
             enc = tokenizer(
                 wrapped, return_tensors="pt", padding=True, truncation=True
             ).to(model.device)
+
+            enc_f = tokenizer(wrapped_f, return_tensors="pt", padding=True, truncation=True
+            )
+
             with torch.inference_mode():
                 out = model(**enc, **run_kwargs)#.cpu()
 
@@ -297,11 +308,14 @@ def run_prompting(
                 layer_name = f"attn_{layer_idx}"
 
                 if layer_name not in all_attn:
+                    # all_attn[layer_name] = {
+                    #     "entropy": [],
+                    #     "sum_to_max": [],
+                    #     "sum_to_last": [],
+                    # }
                     all_attn[layer_name] = {
-                        "entropy": [],
-                        "sum_to_max": [],
-                        "sum_to_last": [],
-                        "entropy_last": [],
+                        'sum': [],
+                        'max': [],
                     }
 
                 batch, heads, seq_len, _ = attn_layer.shape
@@ -314,30 +328,29 @@ def run_prompting(
                
                 # Apply the mask to the attention layer
                 masked_attn = attn_layer.cpu() * combined_mask
+                masked_attn = masked_attn[:, :, -1, :]  # get the last token's attention
+                # get_mask_2 = sum(enc_f.attention_mask, dim=-1) > 0 # batch x 1
+                attn_sum = []
+                attn_max = []
+                # print(f"Processing layer {layer_name} with shape {masked_attn.shape}")
+                for b in range(masked_attn.shape[0]):
+                    get_m = enc_f.attention_mask[b, :].sum().item()  # Number of valid tokens in the batch
+                    l = masked_attn[b].shape[-1]
+                    up_to = l - get_m
+                    a_m = masked_attn[b, :, 0:up_to]
+                    # print(a_m.shape, "a_m shape")  # Debugging line to check the shape of a_m
+                    # print(l, get_m, a_m.shape)
 
-                # Renormalize attention rows (prevent division by zero)
-                # attn_row_sums = masked_attn.sum(dim=-1, keepdim=True).clamp(1e-9)
+                    attn_sum.append(a_m.sum(dim=-1).unsqueeze(0))  # Sum over the last dimension (tokens)
+                    attn_max.append(a_m.max(dim=-1).values.unsqueeze(0))  # Max over the last dimension (tokens)
 
-                # masked_attn = masked_attn / attn_row_sums  # Now rows sum to 1 again
-
-                entropy, sum_to_max, sum_to_last, entropy_last = aggregate_attention(masked_attn.float(), attention_mask)
+                attn_sum = torch.cat(attn_sum, dim=0)  # Concatenate along batch dimension
+                attn_max = torch.cat(attn_max, dim=0)
                 
+                print(f"Layer {layer_name} processed: sum shape {attn_sum.shape}, max shape {attn_max.shape}")
+                all_attn[layer_name]['sum'].append(attn_sum)
+                all_attn[layer_name]['max'].append(attn_max)
 
-                # masked_attn = attn_layer.detach().cpu()[:, :, -1, :]  # Get last token attention
-                all_attn[layer_name]["entropy"].append(entropy)
-                all_attn[layer_name]["sum_to_max"].append(sum_to_max)
-                all_attn[layer_name]["sum_to_last"].append(sum_to_last)
-                all_attn[layer_name]["entropy_last"].append(entropy_last)
-
-                # all_attn.setdefault(layer_name, {'entropy' : []}).append(masked_attn)
-
-            # # Process hidden states if available
-            # if hasattr(out, "hidden_states") and out.hidden_states is not None:
-            #     for layer, h in zip(layer_names, out.hidden_states[1:]):  # Skip 0th, start enumeration from 1
-            #         all_states.setdefault(layer, []).append((h * enc.attention_mask.unsqueeze(-1)).cpu())
-           
-            # del out, enc
-            # torch.cuda.empty_cache()
         del out, enc, masked_attn, attn_layer, attention_mask, combined_mask, mask_q, mask_k
         if torch.cuda.is_available():
             gc.collect()
@@ -349,10 +362,11 @@ def run_prompting(
         #     all_attn[layer_name] = padded_attn
 
         for layer_name, attn_data in all_attn.items():
-            all_attn[layer_name]["entropy"] = torch.cat(attn_data["entropy"], dim=0)
-            all_attn[layer_name]["sum_to_max"] = torch.cat(attn_data["sum_to_max"], dim=0)
-            all_attn[layer_name]["sum_to_last"] = torch.cat(attn_data["sum_to_last"], dim=0)
-            all_attn[layer_name]["entropy_last"] = torch.cat(attn_data["entropy_last"], dim=0)
+            # all_attn[layer_name]["entropy"] = torch.cat(attn_data["entropy"], dim=0)
+            # all_attn[layer_name]["sum_to_max"] = torch.cat(attn_data["sum_to_max"], dim=0)
+            # all_attn[layer_name]["sum_to_last"] = torch.cat(attn_data["sum_to_last"], dim=0)
+            all_attn[layer_name]['sum'] = torch.cat(attn_data['sum'], dim=0)  # Concatenate all attention sums
+            all_attn[layer_name]['max'] = torch.cat(attn_data['max'], dim=0)  # Concatenate all attention maxes
 
         return all_attn
 
@@ -411,13 +425,26 @@ def main(args):
         )
         print("Using template", template["description"])
 
-    
-
     print("Loading the HarmBench dataset")
     dataset = load_dataset("walledai/HarmBench", "standard")["train"]
     count = min(args.num_prompts, len(dataset))
     prompts = [ex["prompt"] for ex in dataset.select(range(count))]
     print(f"Loaded {len(prompts)} prompts from HarmBench dataset.")
+
+    safe_model_name = re.sub(r'[\\/*?:"<>|]', "_", args.model)
+    os.makedirs(f"{args.output_dir}/{safe_model_name}", exist_ok=True)
+
+    
+    out_file = os.path.join(
+        args.output_dir, f"{safe_model_name}/eval_toxicity.csv"
+    )
+    df = pd.read_csv(out_file, sep=";")
+    print(df.head())   
+
+    # prompts_all = df["prompt"].tolist() 
+    responses = df["model_output"].tolist()
+
+    prompts_all = [p + r for p, r in zip(df["prompt"].tolist(), df["model_output"].tolist())]
 
     if args.steer_layer is not None:
         safe_model_name = re.sub(r'[\\/*?:"<>|]', "_", args.model)
@@ -444,13 +471,12 @@ def main(args):
         model,
         tokenizer,
         prompts,
+        responses=responses,
         base_model=args.base_model,
         template=template,
         starting_batch_size=args.batch_size,
     )
     # print(f"Generated {len(responses)} responses.")
-   
-        
     if args.steer_layer is not None:
         print(f"Removing steering vector hook from layer {args.steer_layer}")
         handle.remove()  # Remove the hook after use
@@ -475,28 +501,26 @@ def main(args):
         print(f"Steering vectors applied to attention patterns for layer {args.steer_layer} on {side} side.")
         torch.save(
             all_states,
-            os.path.join(save_path, f"summed_attention_pattern_steered.pt"),
+            os.path.join(save_path, f"summed_attention_pattern_responses_steered.pt"),
         )
         # print(f"Saved attention states to {save_path}/summed_attention_pattern.safetensors")
-        print(f"Saved attention states to {save_path}/summed_attention_pattern_steered.pt")
+        print(f"Saved attention states to {save_path}/summed_attention_pattern_responses_steered.pt")
 
     else:
         torch.save(
             all_states,
-            os.path.join(save_path, f"summed_attention_pattern.pt"),
+            os.path.join(save_path, f"summed_attention_pattern_responses.pt"),
         )
         # print(f"Saved attention states to {save_path}/summed_attention_pattern.safetensors")
-        print(f"Saved attention states to {save_path}/summed_attention_pattern.pt")
+        print(f"Saved attention states to {save_path}/summed_attention_pattern_responses.pt")
 
 
 
 if __name__ == "__main__":
 
     args = parse_args()
-    # l = ["model.layers.5", "model.layers.14"]
-
-    for i, model in enumerate(["google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct"]): #["google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct"]: # :
+    l = ["model.layers.5", "model.layers.14"]
+    for i, model in enumerate(["google/gemma-2-2b", "meta-llama/Llama-3.2-3B"]): #["google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct"], ["google/gemma-2-2b", "meta-llama/Llama-3.2-3B"] :
         args.model = model
-        args.steer_layer = None #l[i]
-
+        args.steer_layer = l[i]
         main(args)
