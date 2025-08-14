@@ -7,8 +7,9 @@ import re
 import time
 from typing import Dict, List, Optional, Tuple, Union
 
+import torch
 import torch.nn.functional as F
-from sql_helper import save_prompts_responses
+from sql_helper import load_prompts_responses, save_prompts_responses
 
 os.environ["TORCHINDUCTOR_DISABLE"] = "1"
 os.environ["TORCH_COMPILE"] = "0"
@@ -16,9 +17,11 @@ os.environ["TORCHDYNAMO_DISABLE"] = "1"
 os.environ["DISABLE_TORCH_COMPILE"] = "1"
 os.environ["TRANSFORMERS_NO_COMPILE"] = "1"
 
+torch.set_float32_matmul_precision("high")
+
+
 import numpy as np
 import pandas as pd
-import torch
 from accelerate.utils import find_executable_batch_size
 from datasets import load_dataset
 from safetensors.torch import save_file as save_safetensors
@@ -368,52 +371,63 @@ def main(args):
         
         steering_vector_side = steering_vector[layer_name][side] #* steering_vector[layer_name]["scale"]
         print(f"Injecting steering vector for layer {layer_name} on {side} side: {steering_vector_side.shape}")
-
-        handle = steering_vector_hook(name2mod[layer_name], steering_vector_side, alpha=alpha)
-        # hooks.append(handle)
-
-        try:
-            responses = generate_responses(
-                model,
-                tokenizer,
-                prompts,
-                base_model=args.base_model,
-                max_new_tokens=args.max_new_tokens,
-                do_sample=args.do_sample,
-                temperature=args.temperature,
-                top_p=args.top_p,
-                starting_batch_size=args.batch_size,
-                template=template,
-                output_dir=args.output_dir,
-            )
-            print(f"Generated {len(responses)} responses.")
-            
-            filtered = [(p, r) for p, r in zip(prompts, responses) if r.strip() != "<EMPTY>"]
-            filtered_prompts, filtered_responses = (
-                zip(*filtered) if filtered else (prompts, responses)
-            )
-
+        # folder = os.path.join(output_dir, safe_model)
+        # filename = f"{layer_name}__alpha_{alpha}.json.zst"
+        # path = os.path.join(folder, filename)
+        if os.path.exists(f"{args.output_dir}/{safe_model_name}/{layer_name}__alpha_{alpha}.json.zst"):
+            filtered_prompts, filtered_responses = load_prompts_responses(args.output_dir, args.model, layer_name, alpha)
             print(f"Generated {len(filtered_prompts)} valid responses out of {len(prompts)} prompts.")
             print(f"Generated {len(filtered_responses)} valid responses out of {len(responses)} total responses.")
-            # layer_name = 'all_layers'  # Use a single key for all layers
             responses_after[layer_name] = filtered_responses
             prompts_after[layer_name] = filtered_prompts
 
-            # Save the prompts and responses
-            save_prompts_responses(args.output_dir, args.model, layer_name, alpha, filtered_prompts, filtered_responses)
+        else:
 
-        finally:
-            # for h in hooks:
-            #     h.remove()
-            handle.remove()
-            # hooks.clear()
-            del handle, steering_vector_side #, name2mod[layer_name]._forward_hooks           
-            if torch.cuda.is_available():
-                gc.collect()
-                torch.cuda.empty_cache()
+            handle = steering_vector_hook(name2mod[layer_name], steering_vector_side, alpha=alpha)
+            # hooks.append(handle)
+
+            try:
+                responses = generate_responses(
+                    model,
+                    tokenizer,
+                    prompts,
+                    base_model=args.base_model,
+                    max_new_tokens=args.max_new_tokens,
+                    do_sample=args.do_sample,
+                    temperature=args.temperature,
+                    top_p=args.top_p,
+                    starting_batch_size=args.batch_size,
+                    template=template,
+                    output_dir=args.output_dir,
+                )
+                print(f"Generated {len(responses)} responses.")
+                
+                filtered = [(p, r) for p, r in zip(prompts, responses) if r.strip() != "<EMPTY>"]
+                filtered_prompts, filtered_responses = (
+                    zip(*filtered) if filtered else (prompts, responses)
+                )
+
+                print(f"Generated {len(filtered_prompts)} valid responses out of {len(prompts)} prompts.")
+                print(f"Generated {len(filtered_responses)} valid responses out of {len(responses)} total responses.")
+                # layer_name = 'all_layers'  # Use a single key for all layers
+                responses_after[layer_name] = filtered_responses
+                prompts_after[layer_name] = filtered_prompts
+
+                # Save the prompts and responses
+                save_prompts_responses(args.output_dir, args.model, layer_name, alpha, filtered_prompts, filtered_responses)
+
+            finally:
+                # for h in hooks:
+                #     h.remove()
+                handle.remove()
+                # hooks.clear()
+                del handle, steering_vector_side #, name2mod[layer_name]._forward_hooks           
+                if torch.cuda.is_available():
+                    gc.collect()
+                    torch.cuda.empty_cache()
 
     model.to("cpu")  # Move model to CPU to free GPU memory
-    del model, tokenizer, name2mod[layer_name]._forward_hooks 
+    del model, tokenizer#, name2mod[layer_name]._forward_hooks 
     # for layer_name in layer_names:
     #     del name2mod[layer_name]._forward_hooks
 
@@ -432,13 +446,13 @@ def main(args):
     labels_after = {}
     print("Classifying responses after steering injection...")
 
-    bnb_config_2 = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16)
+    bnb_config_2 = BitsAndBytesConfig(load_in_4bit=True) #, bnb_4bit_compute_dtype=torch.bfloat16)
 
 
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-    bnb_config_1 = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16)
+    bnb_config_1 = BitsAndBytesConfig(load_in_4bit=True) #, bnb_4bit_compute_dtype=torch.float16)
 
     print(f"Loading classifier: {args.cls_model}")
     cls_model = AutoModelForCausalLM.from_pretrained(
@@ -504,8 +518,8 @@ if __name__ == "__main__":
     for i, model in enumerate(["google/gemma-2-2b", "meta-llama/Llama-3.2-3B"]): #"google/gemma-2-2b-it",
         args = parse_args()
         args.model = model
-        alpha = [-0.1, -0.3, -0.6, -0.9, -1.0, -1.5, -2.0, -2.5, -3.0, -4.0, -4.5, -5.0, -10.0] 
-        alpha += [0.1, 0.3, 0.6, 0.9, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 4.5, 5.0, 10.0]
+        alpha = [ -1.0, -5.0, -10.0, -20.0] #-0.1, -0.3, -0.6, -0.9, -1.5, -2.0, -2.5, -3.0, -4.0, -4.5
+        alpha += [1.0, 5.0, 10.0, 20.0] #[0.1, 0.3, 0.6, 0.9, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 4.5, 5.0, 10.0] 
         print(f"Running evaluation for model: {args.model} with alphas: {alpha}")
         for a in alpha:
             args.alpha = a
