@@ -6,6 +6,7 @@ import os
 import re
 import time
 from typing import Dict, List, Optional, Tuple, Union
+import json
 
 from matplotlib import cm, pyplot as plt
 import torch
@@ -52,11 +53,11 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 # bnb_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16)
 
 
-
 def load_model_and_tokenizer(model_name: str, base_model: bool = False, bnb_config: Optional[BitsAndBytesConfig] = None):
     print(f"Loading model: {model_name}")
+    hf_token = os.getenv("HUGGINGFACEHUB_API_TOKEN")
     tokenizer = AutoTokenizer.from_pretrained(
-        model_name, padding_side="left", truncation_side="left"
+        model_name, padding_side="left", truncation_side="left", token=hf_token,
     )
     if bnb_config is not None:
         model = AutoModelForCausalLM.from_pretrained(
@@ -64,12 +65,14 @@ def load_model_and_tokenizer(model_name: str, base_model: bool = False, bnb_conf
             torch_dtype=torch.bfloat16,
             quantization_config=bnb_config,
             device_map=device, #"auto",
+            token=hf_token,
         ).eval()
     else:
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
             torch_dtype=torch.bfloat16,
             device_map=device,  # "auto",
+            token=hf_token,
         ).eval()
 
     if tokenizer.pad_token is None:
@@ -228,7 +231,7 @@ def parse_args():
     p.add_argument("--alpha", type=list, default=[1.0], help="Steering strength (default: 1.0)")
     p.add_argument("--bnb_config", type=str, default=None)
     p.add_argument("--num_prompts", type=int, default=300)
-    p.add_argument("--output_dir", type=str, default="/data/erblina/Master_thesis")
+    p.add_argument("--output_dir", type=str, default="/mnt")
     p.add_argument("--max_new_tokens", type=int, default=256)
     p.add_argument("--temperature", type=float, default=0.7)
     p.add_argument("--top_p", type=float, default=0.9)
@@ -271,7 +274,7 @@ def main(args):
         print("Using template", template["description"])
 
     print("Loading the HarmBench dataset")
-    dataset = load_dataset("walledai/HarmBench", "standard")["train"]
+    dataset = load_dataset("walledai/HarmBench", "standard", token=os.getenv("HUGGINGFACEHUB_API_TOKEN"))["train"]
     count = min(args.num_prompts, len(dataset))
     prompts = [ex["prompt"] for ex in dataset.select(range(count))]
     print(f"Loaded {len(prompts)} prompts from HarmBench dataset.")
@@ -360,51 +363,63 @@ def main(args):
         total_mem = torch.cuda.get_device_properties(0).total_memory
         print(f"CUDA Memory: {free_mem / 1024**3:.2f} GB free of {total_mem / 1024**3:.2f} GB total")
   
+    save_dir = os.path.join(args.output_dir, safe_model_name)
+    os.makedirs(save_dir, exist_ok=True)
+
+
+    save_dir = os.path.join(args.output_dir, safe_model_name)
+    os.makedirs(save_dir, exist_ok=True)
+
+    # Save as JSON
+    with open(os.path.join(save_dir, "steered_perplexities.json"), "w") as f:
+        json.dump(perplexities, f, indent=2)
+
+    with open(os.path.join(save_dir, "base_perplexity.json"), "w") as f:
+        json.dump({"base_perplexity": base_perplexity}, f)
+
+    # plt.figure(figsize=(10, 6))
+
+    # # Separate alphas into positive and negative
+    # alpha = sorted(perplexities.keys(), key=float)  # sort for consistency
+    # pos_alphas = [a for a in alpha if float(a) > 0]
+    # neg_alphas = [a for a in alpha if float(a) < 0]
+
+    # # Create color maps: Reds for positive, Blues for negative
+    # reds = cm.Reds(np.linspace(0.4, 0.9, len(pos_alphas)))   # lighter → darker reds
+
+    # neg_alphas = sorted([a for a in alpha if float(a) < 0], key=lambda x: abs(float(x)))
+    # blues = cm.Blues(np.linspace(0.4, 0.9, len(neg_alphas)))
+    # # blues = cm.Blues(np.linspace(0.4, 0.9, len(neg_alphas))) # lighter → darker blues
+    # plt.axhline(y=base_perplexity, linestyle="--", color="gray", linewidth=1.5,
+    #         label=rf"$\alpha$=0")
+    # # Plot positives
+    # for a, c in zip(pos_alphas, reds):
+    #     layer_names = [int(x["layer_name"].split('.')[-1]) for x in perplexities[a]]
+    #     avg_toxicities = [x["perplexity"] for x in perplexities[a]]
+    #     inx = np.argsort(layer_names)
+    #     ordered_l = np.array(layer_names)[inx]
+    #     ordered_av = np.array(avg_toxicities)[inx]
+    #     plt.plot(ordered_l, ordered_av, label=rf"$\alpha$={a}", color=c)
+
+    # # Plot negatives
+    # for a, c in zip(neg_alphas, blues):
+    #     layer_names = [int(x["layer_name"].split('.')[-1]) for x in perplexities[a]]
+    #     avg_toxicities = [x["perplexity"] for x in perplexities[a]]
+    #     inx = np.argsort(layer_names)
+    #     ordered_l = np.array(layer_names)[inx]
+    #     ordered_av = np.array(avg_toxicities)[inx]
+    #     plt.plot(ordered_l, ordered_av, label=rf"$\alpha$={a}", color=c)
 
     
-    plt.figure(figsize=(10, 6))
-
-    # Separate alphas into positive and negative
-    alpha = sorted(perplexities.keys(), key=float)  # sort for consistency
-    pos_alphas = [a for a in alpha if float(a) > 0]
-    neg_alphas = [a for a in alpha if float(a) < 0]
-
-    # Create color maps: Reds for positive, Blues for negative
-    reds = cm.Reds(np.linspace(0.4, 0.9, len(pos_alphas)))   # lighter → darker reds
-
-    neg_alphas = sorted([a for a in alpha if float(a) < 0], key=lambda x: abs(float(x)))
-    blues = cm.Blues(np.linspace(0.4, 0.9, len(neg_alphas)))
-    # blues = cm.Blues(np.linspace(0.4, 0.9, len(neg_alphas))) # lighter → darker blues
-    plt.axhline(y=base_perplexity, linestyle="--", color="gray", linewidth=1.5,
-            label=rf"$\alpha$=0")
-    # Plot positives
-    for a, c in zip(pos_alphas, reds):
-        layer_names = [int(x["layer_name"].split('.')[-1]) for x in perplexities[a]]
-        avg_toxicities = [x["perplexity"] for x in perplexities[a]]
-        inx = np.argsort(layer_names)
-        ordered_l = np.array(layer_names)[inx]
-        ordered_av = np.array(avg_toxicities)[inx]
-        plt.plot(ordered_l, ordered_av, label=rf"$\alpha$={a}", color=c)
-
-    # Plot negatives
-    for a, c in zip(neg_alphas, blues):
-        layer_names = [int(x["layer_name"].split('.')[-1]) for x in perplexities[a]]
-        avg_toxicities = [x["perplexity"] for x in perplexities[a]]
-        inx = np.argsort(layer_names)
-        ordered_l = np.array(layer_names)[inx]
-        ordered_av = np.array(avg_toxicities)[inx]
-        plt.plot(ordered_l, ordered_av, label=rf"$\alpha$={a}", color=c)
-
-    
-    plt.xlabel("Layer ID")
-    plt.ylabel("Perplexity")
-    plt.title(f"Results for {safe_model_name}")
-    plt.legend(title=r"$\alpha$ (steering strength)", loc="upper right")
-    plt.xticks(ordered_l, rotation=45)
-    plt.tight_layout()
-    plt.savefig(f"/home/fe/purelku/Desktop/Master_thesis/results_steering_plot/{safe_model_name}_perplexity_results.png", dpi=300)
-    plt.savefig(f"/home/fe/purelku/Desktop/Master_thesis/results_steering_plot/{safe_model_name}_perplexity_results.svg", format='svg')
-    plt.close()
+    # plt.xlabel("Layer ID")
+    # plt.ylabel("Perplexity")
+    # plt.title(f"Results for {safe_model_name}")
+    # plt.legend(title=r"$\alpha$ (steering strength)", loc="upper right")
+    # plt.xticks(ordered_l, rotation=45)
+    # plt.tight_layout()
+    # plt.savefig(f"/home/fe/purelku/Desktop/Master_thesis/results_steering_plot/{safe_model_name}_perplexity_results.png", dpi=300)
+    # plt.savefig(f"/home/fe/purelku/Desktop/Master_thesis/results_steering_plot/{safe_model_name}_perplexity_results.svg", format='svg')
+    # plt.close()
     
 
    
@@ -418,12 +433,12 @@ def main(args):
 
 
 if __name__ == "__main__":
-    for i, model in enumerate(["google/gemma-2-2b", "meta-llama/Llama-3.2-3B"]): #"google/gemma-2-2b-it",
-        args = parse_args()
-        args.model = model
-        alpha = [ -1.0, -5.0, -10.0]#, -20.0] #-0.1, -0.3, -0.6, -0.9, -1.5, -2.0, -2.5, -3.0, -4.0, -4.5
-        alpha += [1.0, 5.0, 10.0]#, 20.0] #[0.1, 0.3, 0.6, 0.9, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 4.5, 5.0, 10.0] 
-        print(f"Running evaluation for model: {args.model} with alphas: {alpha}")
-        # for a in alpha:
-        args.alpha = alpha
-        main(args)
+    # for i, model in enumerate(["google/gemma-2-2b", "meta-llama/Llama-3.2-3B"]): #"google/gemma-2-2b-it",
+    args = parse_args()
+    # args.model = model
+    alpha = [-0.5, -1.0, -1.5, -2.0, -2.5, -3.0, -3.5, -4.0, -4.5, -5.0, -10.0]
+    alpha += [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 10.0]
+    print(f"Running evaluation for model: {args.model} with alphas: {alpha}")
+    # for a in alpha:
+    args.alpha = alpha
+    main(args)
