@@ -36,7 +36,7 @@ torch._dynamo.config.suppress_errors = False
 SEED = 42
 os.environ["PYTHONHASHSEED"] = str(SEED)
 # random.seed(SEED)
-# np.random.seed(SEED)
+np.random.seed(SEED)
 torch.manual_seed(SEED)
 if torch.cuda.is_available():
     torch.cuda.manual_seed_all(SEED)
@@ -52,8 +52,9 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 def load_model_and_tokenizer(model_name: str, base_model: bool = False, bnb_config: Optional[BitsAndBytesConfig] = None):
     print(f"Loading model: {model_name}")
+    hf_token = os.getenv("HUGGINGFACEHUB_API_TOKEN")
     tokenizer = AutoTokenizer.from_pretrained(
-        model_name, padding_side="left", truncation_side="left"
+        model_name, padding_side="left", truncation_side="left", token=hf_token,
     )
     if bnb_config is not None:
         model = AutoModelForCausalLM.from_pretrained(
@@ -61,12 +62,14 @@ def load_model_and_tokenizer(model_name: str, base_model: bool = False, bnb_conf
             torch_dtype=torch.bfloat16,
             quantization_config=bnb_config,
             device_map=device, #"auto",
+            token=hf_token,
         ).eval()
     else:
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
             torch_dtype=torch.bfloat16,
             device_map=device,  # "auto",
+            token=hf_token,
         ).eval()
 
     if tokenizer.pad_token is None:
@@ -140,7 +143,7 @@ def generate_responses(
     @find_executable_batch_size(starting_batch_size=starting_batch_size)
     def _inner(bs):
         responses = [] 
-        for i in tqdm(range(0, len(prompts), bs), desc=f"Generating (bs={bs})"):
+        for i in tqdm(range(0, len(prompts), bs), desc=f"Generating (bs={bs})", mininterval=10):
             chunk = prompts[i : i + bs]
             # ----- wrap with chat template -----
             if base_model:
@@ -190,11 +193,11 @@ def generate_responses(
                 torch.cuda.empty_cache()
 
 
-        print(len(responses), "responses generated")
+        # print(len(responses), "responses generated")
         return responses
     
     responses = _inner()
-    print(len(responses), "responses generated")
+    # print(len(responses), "responses generated")
     return responses
 
 
@@ -229,7 +232,7 @@ def classify_generation(
         l_results = []
         for i in tqdm(
             range(0, len(combined_inputs), bs),
-            desc=f"Classifying with {cls_model_id} (bs={bs})",
+            desc=f"Classifying with {cls_model_id} (bs={bs})", mininterval=10
         ):
             batch_texts = combined_inputs[i : i + bs]
             enc = cls_tokenizer(batch_texts, return_tensors="pt", padding="longest").to(
@@ -254,7 +257,7 @@ def classify_generation(
                     print(f"Unexpected label '{label}' in: {d}")
 
                 l_results.append(is_toxic)
-        print(len(l_results), "responses classified")
+        # print(len(l_results), "responses classified")
         
         del enc, out
         if torch.cuda.is_available():
@@ -285,7 +288,7 @@ def parse_args():
     p.add_argument("--alpha", type=float, default=1.0, help="Steering strength (default: 1.0)")
     p.add_argument("--bnb_config", type=str, default=None)
     p.add_argument("--num_prompts", type=int, default=300)
-    p.add_argument("--output_dir", type=str, default="/data/erblina/Master_thesis")
+    p.add_argument("--output_dir", type=str, default="/mnt")
     p.add_argument("--max_new_tokens", type=int, default=256)
     p.add_argument("--temperature", type=float, default=0.7)
     p.add_argument("--top_p", type=float, default=0.9)
@@ -326,9 +329,8 @@ def main(args):
             system_message=args.system_message, # LLAMA2_DEFAULT_SYSTEM_PROMPT,
         )
         print("Using template", template["description"])
-
-    print("Loading the HarmBench dataset")
-    dataset = load_dataset("walledai/HarmBench", "standard")["train"]
+    # print("Loading the HarmBench dataset")
+    dataset = load_dataset("walledai/HarmBench", "standard", token=os.getenv("HUGGINGFACEHUB_API_TOKEN"))["train"]
     count = min(args.num_prompts, len(dataset))
     prompts = [ex["prompt"] for ex in dataset.select(range(count))]
     print(f"Loaded {len(prompts)} prompts from HarmBench dataset.") 
@@ -362,7 +364,7 @@ def main(args):
     alpha = args.alpha if hasattr(args, 'alpha') else 1.0
     
     layer_names = list(steering_vector.keys()) 
-    print(len(layer_names), "layers to steer")
+    # print(len(layer_names), "layers to steer")
     # hooks = []
     for layer_name in layer_names: 
 
@@ -370,14 +372,14 @@ def main(args):
             raise ValueError(f"Layer '{layer_name}' not found in model.named_modules()")
         
         steering_vector_side = steering_vector[layer_name][side] #* steering_vector[layer_name]["scale"]
-        print(f"Injecting steering vector for layer {layer_name} on {side} side: {steering_vector_side.shape}")
+        print(f"Injecting steering vector for layer {layer_name} on {side} side: {steering_vector_side.shape}, alpha={alpha}")
         # folder = os.path.join(output_dir, safe_model)
         # filename = f"{layer_name}__alpha_{alpha}.json.zst"
         # path = os.path.join(folder, filename)
         if os.path.exists(f"{args.output_dir}/{safe_model_name}/{layer_name}__alpha_{alpha}.json.zst"):
             filtered_prompts, filtered_responses = load_prompts_responses(args.output_dir, args.model, layer_name, alpha)
-            print(f"Generated {len(filtered_prompts)} valid responses out of {len(filtered_prompts)} prompts.")
-            print(f"Generated {len(filtered_responses)} valid responses out of {len(filtered_responses)} total responses.")
+            # print(f"Generated {len(filtered_prompts)} valid responses out of {len(prompts)} prompts.")
+            # print(f"Generated {len(filtered_responses)} valid responses out of {len(prompts)} total prompts.")
             responses_after[layer_name] = filtered_responses
             prompts_after[layer_name] = filtered_prompts
 
@@ -400,15 +402,15 @@ def main(args):
                     template=template,
                     output_dir=args.output_dir,
                 )
-                print(f"Generated {len(responses)} responses.")
+                # print(f"Generated {len(responses)} responses.")
                 
                 filtered = [(p, r) for p, r in zip(prompts, responses) if r.strip() != "<EMPTY>"]
                 filtered_prompts, filtered_responses = (
                     zip(*filtered) if filtered else (prompts, responses)
                 )
 
-                print(f"Generated {len(filtered_prompts)} valid responses out of {len(prompts)} prompts.")
-                print(f"Generated {len(filtered_responses)} valid responses out of {len(responses)} total responses.")
+                # print(f"Generated {len(filtered_prompts)} valid responses out of {len(prompts)} prompts.")
+                # print(f"Generated {len(filtered_responses)} valid responses out of {len(responses)} total responses.")
                 # layer_name = 'all_layers'  # Use a single key for all layers
                 responses_after[layer_name] = filtered_responses
                 prompts_after[layer_name] = filtered_prompts
@@ -427,34 +429,36 @@ def main(args):
                     torch.cuda.empty_cache()
 
     model.to("cpu")  # Move model to CPU to free GPU memory
-    del model, tokenizer
-
-    if name2mod[layer_name]._forward_hooks:
-        del name2mod[layer_name]._forward_hooks  # Clear hooks if they exist
-      
+    del model, tokenizer#, name2mod[layer_name]._forward_hooks 
+    # for layer_name in layer_names:
+    #     del name2mod[layer_name]._forward_hooks
 
     if torch.cuda.is_available():
         gc.collect()               
         torch.cuda.empty_cache()
         # Print free and total CUDA memory
         
-        free_mem = torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated()
-        total_mem = torch.cuda.get_device_properties(0).total_memory
-        print(f"CUDA Memory: {free_mem / 1024**3:.2f} GB free of {total_mem / 1024**3:.2f} GB total")
-    
+       
     torch.cuda.synchronize()
 
 
     labels_after = {}
-    print("Classifying responses after steering injection...")
+    # print("Classifying responses after steering injection...")
 
-    bnb_config_2 = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16)
+    # bnb_config_2 = BitsAndBytesConfig(load_in_4bit=True) #, bnb_4bit_compute_dtype=torch.bfloat16)
 
 
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+        gc.collect()
 
-    bnb_config_1 = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16)
+
+    # if os.path.exists(f"{args.output_dir}/{safe_model_name}/labels_steering_{side}_alpha_{alpha}.npy"):
+    #     print(f'The labels file exists for alpha = {alpha}')
+
+
+    # else:
+    bnb_config_1 = BitsAndBytesConfig(load_in_4bit=True) #, bnb_4bit_compute_dtype=torch.float16)
 
     print(f"Loading classifier: {args.cls_model}")
     cls_model = AutoModelForCausalLM.from_pretrained(
@@ -462,12 +466,13 @@ def main(args):
         quantization_config=bnb_config_1,
         torch_dtype=torch.bfloat16, #if torch.cuda.is_available() else torch.float32,
         device_map=device,  # "auto",
+        token=os.getenv("HUGGINGFACEHUB_API_TOKEN"),
     ).eval()
     cls_tokenizer = AutoTokenizer.from_pretrained(
-        args.cls_model, padding_side="left", truncation_side="left"
+        args.cls_model, padding_side="left", truncation_side="left", token=os.getenv("HUGGINGFACEHUB_API_TOKEN")
     )
     
-    res = []
+    # res = []
 
     for layer_name, responses in responses_after.items():
         cls_results = classify_generation(
@@ -477,24 +482,24 @@ def main(args):
                 cls_tokenizer,
                 args.cls_model,
                 args.behavior,
-                bnb_config=bnb_config_2,
-                batch_size=32, #args.batch_size,  ### this simply because I know in my case
+                bnb_config=bnb_config_1,
+                batch_size=64,  ### this simply because I know in my case
             )
-        print(f"Classified {len(cls_results)} responses.")
+        # print(f"Classified {len(cls_results)} responses.")
         # Average label for quick numeric overview
         valid_lab = [r for r in cls_results if r != -1]
         avg_label = sum(valid_lab) / len(cls_results)
-        print(f"Layer {layer_name} classification results:")
-        print(f"Mean toxicity label: {avg_label:.3f}, {sum(valid_lab)}/{len(cls_results)} toxic responses")
+        # print(f"Layer {layer_name} classification results:")
+        print(f"Layer {layer_name} classification results:", f"Mean toxicity label: {avg_label:.3f}, {sum(valid_lab)}/{len(cls_results)} toxic responses")
         labels_after[layer_name] = np.array(cls_results)
-        res.append(
-            {
-                "layer_name": layer_name,
-                "avg_toxicity": avg_label,
-                "num_toxic": sum(valid_lab),
-                "total_responses": len(cls_results),
-            }
-        )
+        # res.append(
+        #     {
+        #         "layer_name": layer_name,
+        #         "avg_toxicity": avg_label,
+        #         "num_toxic": sum(valid_lab),
+        #         "total_responses": len(cls_results),
+        #     }
+        # )
     
     del cls_model, cls_tokenizer
     if torch.cuda.is_available():
@@ -503,7 +508,7 @@ def main(args):
 
     np.save(f"{args.output_dir}/{safe_model_name}/labels_steering_{side}_alpha_{alpha}.npy", labels_after)
 
-    print("Results: ", res)
+    # print("Results: ", res)
     
 
    
@@ -517,12 +522,12 @@ def main(args):
 
 
 if __name__ == "__main__":
-    for i, model in enumerate(["google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct"]): #"google/gemma-2-2b-it",
-        args = parse_args()
-        args.model = model
-        # alpha = [ -1.0, -5.0, -10.0, -20.0] #-0.1, -0.3, -0.6, -0.9, -1.5, -2.0, -2.5, -3.0, -4.0, -4.5
-        alpha = [1.0, 5.0, 10.0, 20.0] #[0.1, 0.3, 0.6, 0.9, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 4.5, 5.0, 10.0] 
-        print(f"Running evaluation for model: {args.model} with alphas: {alpha}")
-        for a in alpha:
-            args.alpha = a
-            main(args)
+    # for i, model in enumerate(["google/gemma-2-2b", "meta-llama/Llama-3.2-3B"]): #"google/gemma-2-2b-it",
+    args = parse_args()
+    # args.model = model
+    # alpha = [ -1.0, -5.0, -10.0, -20.0] #-0.1, -0.3, -0.6, -0.9, -1.5, -2.0, -2.5, -3.0, -4.0, -4.5
+    # alpha = [1.0, 5.0, 10.0, 20.0] #[0.1, 0.3, 0.6, 0.9, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 4.5, 5.0, 10.0] 
+    # print(f"Running evaluation for model: {args.model} with alphas: {alpha}")
+    # for a in alpha:
+    #     args.alpha = a
+    main(args)
