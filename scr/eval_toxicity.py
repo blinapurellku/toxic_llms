@@ -268,31 +268,14 @@ def parse_args():
     return p.parse_args()
 
 
-def main():
-    args = parse_args()
+def main(args):
 
     if args.bnb_config:
         bnb_config_1 = BitsAndBytesConfig(load_in_8bit=True, bnb_8bit_compute_dtype=torch.bfloat16)
     else:
         bnb_config_1 = None
 
-    model, tokenizer = load_model_and_tokenizer(args.model, args.base_model, bnb_config=bnb_config_1)
-    pad_token_id = tokenizer.pad_token_id  # Save this for later use
-
-    template = None
-    if not args.base_model:
-        template = get_template(
-            model_name_or_path=args.model,
-            chat_template=args.chat_template,
-            system_message=args.system_message, # LLAMA2_DEFAULT_SYSTEM_PROMPT,
-        )
-        print("Using template", template["description"])
-
-    print("Loading the HarmBench dataset")
-    dataset = load_dataset("walledai/HarmBench", "standard")["train"]
-    count = min(args.num_prompts, len(dataset))
-    prompts = [ex["prompt"] for ex in dataset.select(range(count))]
-    print(f"Loaded {len(prompts)} prompts from HarmBench dataset.") 
+    
 
     safe_model_name = re.sub(r'[\\/*?:"<>|]', "_", args.model)
     
@@ -300,8 +283,28 @@ def main():
         df = pd.read_csv(os.path.join(args.output_dir, f"{safe_model_name}/eval_toxicity.csv"), sep=";")
         filtered_prompts = df["prompt"].tolist()
         filtered_responses = df["model_output"].tolist()
-
+        print(f"Found existing evaluation file for {args.model}, loaded {len(filtered_prompts)} prompts and {len(filtered_responses)} responses.")
+    
+    
     else:
+        model, tokenizer = load_model_and_tokenizer(args.model, args.base_model, bnb_config=bnb_config_1)
+        pad_token_id = tokenizer.pad_token_id  # Save this for later use
+
+        template = None
+        if not args.base_model:
+            template = get_template(
+                model_name_or_path=args.model,
+                chat_template=args.chat_template,
+                system_message=args.system_message, # LLAMA2_DEFAULT_SYSTEM_PROMPT,
+            )
+            print("Using template", template["description"])
+
+        print("Loading the HarmBench dataset")
+        dataset = load_dataset("walledai/HarmBench", "standard")["train"]
+        count = min(args.num_prompts, len(dataset))
+        prompts = [ex["prompt"] for ex in dataset.select(range(count))]
+        print(f"Loaded {len(prompts)} prompts from HarmBench dataset.") 
+        
         responses = generate_responses(
             model,
             tokenizer,
@@ -325,15 +328,15 @@ def main():
         print(f"Generated {len(filtered_prompts)} valid responses out of {len(prompts)} prompts.")
         print(f"Generated {len(filtered_responses)} valid responses out of {len(responses)} total responses.")
 
-    del model, tokenizer
-    if torch.cuda.is_available():
-        gc.collect()               
-        torch.cuda.empty_cache()
-        # Print free and total CUDA memory
-        
-        free_mem = torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated()
-        total_mem = torch.cuda.get_device_properties(0).total_memory
-        print(f"CUDA Memory: {free_mem / 1024**3:.2f} GB free of {total_mem / 1024**3:.2f} GB total")
+        del model, tokenizer
+        if torch.cuda.is_available():
+            gc.collect()               
+            torch.cuda.empty_cache()
+            # Print free and total CUDA memory
+            
+            free_mem = torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated()
+            total_mem = torch.cuda.get_device_properties(0).total_memory
+            print(f"CUDA Memory: {free_mem / 1024**3:.2f} GB free of {total_mem / 1024**3:.2f} GB total")
 
     bnb_config_2 = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16)
     cls_results = classify_generation(
@@ -342,7 +345,7 @@ def main():
         args.cls_model,
         args.behavior,
         bnb_config=bnb_config_2,
-        batch_size=args.batch_size,
+        batch_size=32,
     )
     print(f"Classified {len(cls_results)} responses.")
     # Average label for quick numeric overview
@@ -377,4 +380,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+    models = ["google/gemma-2-2b-it", "google/gemma-2-2b", "meta-llama/Llama-3.2-3B", "meta-llama/Llama-3.2-3B-Instruct"]
+
+    for model in models:
+        args.model=model
+        main(args)
