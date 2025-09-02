@@ -294,20 +294,37 @@ def main():
     prompts = [ex["prompt"] for ex in dataset.select(range(count))]
     print(f"Loaded {len(prompts)} prompts from HarmBench dataset.") 
 
-    responses = generate_responses(
-        model,
-        tokenizer,
-        prompts,
-        base_model=args.base_model,
-        max_new_tokens=args.max_new_tokens,
-        do_sample=args.do_sample,
-        temperature=args.temperature,
-        top_p=args.top_p,
-        starting_batch_size=args.batch_size,
-        template=template,
-        output_dir=args.output_dir,
-    )
-    print(f"Generated {len(responses)} responses.")
+    safe_model_name = re.sub(r'[\\/*?:"<>|]', "_", args.model)
+    
+    if os.path.exists(os.path.join(args.output_dir, f"{safe_model_name}/eval_toxicity.csv")):
+        df = pd.read_csv(os.path.join(args.output_dir, f"{safe_model_name}/eval_toxicity.csv"), sep=";")
+        filtered_prompts = df["prompt"].tolist()
+        filtered_responses = df["model_output"].tolist()
+
+    else:
+        responses = generate_responses(
+            model,
+            tokenizer,
+            prompts,
+            base_model=args.base_model,
+            max_new_tokens=args.max_new_tokens,
+            do_sample=args.do_sample,
+            temperature=args.temperature,
+            top_p=args.top_p,
+            starting_batch_size=args.batch_size,
+            template=template,
+            output_dir=args.output_dir,
+        )
+        print(f"Generated {len(responses)} responses.")
+        
+        filtered = [(p, r) for p, r in zip(prompts, responses) if r.strip() != "<EMPTY>"]
+        filtered_prompts, filtered_responses = (
+            zip(*filtered) if filtered else (prompts, responses)
+        )
+
+        print(f"Generated {len(filtered_prompts)} valid responses out of {len(prompts)} prompts.")
+        print(f"Generated {len(filtered_responses)} valid responses out of {len(responses)} total responses.")
+
     del model, tokenizer
     if torch.cuda.is_available():
         gc.collect()               
@@ -317,14 +334,6 @@ def main():
         free_mem = torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated()
         total_mem = torch.cuda.get_device_properties(0).total_memory
         print(f"CUDA Memory: {free_mem / 1024**3:.2f} GB free of {total_mem / 1024**3:.2f} GB total")
-
-    filtered = [(p, r) for p, r in zip(prompts, responses) if r.strip() != "<EMPTY>"]
-    filtered_prompts, filtered_responses = (
-        zip(*filtered) if filtered else (prompts, responses)
-    )
-
-    print(f"Generated {len(filtered_prompts)} valid responses out of {len(prompts)} prompts.")
-    print(f"Generated {len(filtered_responses)} valid responses out of {len(responses)} total responses.")
 
     bnb_config_2 = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16)
     cls_results = classify_generation(
