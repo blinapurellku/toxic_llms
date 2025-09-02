@@ -376,8 +376,8 @@ def main(args):
         # path = os.path.join(folder, filename)
         if os.path.exists(f"{args.output_dir}/{safe_model_name}/{layer_name}__alpha_{alpha}.json.zst"):
             filtered_prompts, filtered_responses = load_prompts_responses(args.output_dir, args.model, layer_name, alpha)
-            print(f"Generated {len(filtered_prompts)} valid responses out of {len(prompts)} prompts.")
-            print(f"Generated {len(filtered_responses)} valid responses out of {len(responses)} total responses.")
+            print(f"Generated {len(filtered_prompts)} valid responses out of {len(filtered_prompts)} prompts.")
+            print(f"Generated {len(filtered_responses)} valid responses out of {len(filtered_responses)} total responses.")
             responses_after[layer_name] = filtered_responses
             prompts_after[layer_name] = filtered_prompts
 
@@ -427,9 +427,11 @@ def main(args):
                     torch.cuda.empty_cache()
 
     model.to("cpu")  # Move model to CPU to free GPU memory
-    del model, tokenizer#, name2mod[layer_name]._forward_hooks 
-    # for layer_name in layer_names:
-    #     del name2mod[layer_name]._forward_hooks
+    del model, tokenizer
+
+    if name2mod[layer_name]._forward_hooks:
+        del name2mod[layer_name]._forward_hooks  # Clear hooks if they exist
+      
 
     if torch.cuda.is_available():
         gc.collect()               
@@ -446,13 +448,13 @@ def main(args):
     labels_after = {}
     print("Classifying responses after steering injection...")
 
-    bnb_config_2 = BitsAndBytesConfig(load_in_4bit=True) #, bnb_4bit_compute_dtype=torch.bfloat16)
+    bnb_config_2 = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16)
 
 
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-    bnb_config_1 = BitsAndBytesConfig(load_in_4bit=True) #, bnb_4bit_compute_dtype=torch.float16)
+    bnb_config_1 = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16)
 
     print(f"Loading classifier: {args.cls_model}")
     cls_model = AutoModelForCausalLM.from_pretrained(
@@ -515,7 +517,7 @@ def main(args):
 
 
 if __name__ == "__main__":
-    for i, model in enumerate(["google/gemma-2-2b", "meta-llama/Llama-3.2-3B"]): #"google/gemma-2-2b-it",
+    for i, model in enumerate(["google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct"]): #"google/gemma-2-2b-it",
         args = parse_args()
         args.model = model
         # alpha = [ -1.0, -5.0, -10.0, -20.0] #-0.1, -0.3, -0.6, -0.9, -1.5, -2.0, -2.5, -3.0, -4.0, -4.5
