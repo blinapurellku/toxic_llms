@@ -171,8 +171,8 @@ if __name__ == "__main__":
     for i, model in enumerate(["google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct", "google/gemma-2-2b", "meta-llama/Llama-3.2-3B"]): #"google/gemma-2-2b-it",
         args = parse_args()
         args.model = model
-        alpha = [ -1.0, -5.0, -10.0] #, -20.0] #-0.1, -0.3, -0.6, -0.9, -1.5, -2.0, -2.5, -3.0, -4.0, -4.5
-        alpha += [1.0, 5.0, 10.0] #, 20.0] #[0.1, 0.3, 0.6, 0.9, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 4.5, 5.0, 10.0] 
+        alpha = [-0.5, -1.0, -1.5, -2.0, -2.5, -3.0, -3.5, -4.0, -4.5, -5.0, -10.0]
+        alpha += [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 10.0]  
         print(f"Running evaluation for model: {args.model} with alphas: {alpha}")
         args.alpha = alpha
         main(args)

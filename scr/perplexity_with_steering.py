@@ -360,52 +360,17 @@ def main(args):
         total_mem = torch.cuda.get_device_properties(0).total_memory
         print(f"CUDA Memory: {free_mem / 1024**3:.2f} GB free of {total_mem / 1024**3:.2f} GB total")
   
+ 
 
-    
-    plt.figure(figsize=(10, 6))
+    save_dir = os.path.join(args.output_dir, safe_model_name)
+    os.makedirs(save_dir, exist_ok=True)
 
-    # Separate alphas into positive and negative
-    alpha = sorted(perplexities.keys(), key=float)  # sort for consistency
-    pos_alphas = [a for a in alpha if float(a) > 0]
-    neg_alphas = [a for a in alpha if float(a) < 0]
+    # Save as JSON
+    with open(os.path.join(save_dir, "steered_perplexities.json"), "w") as f:
+        json.dump(perplexities, f, indent=2)
 
-    # Create color maps: Reds for positive, Blues for negative
-    reds = cm.Reds(np.linspace(0.4, 0.9, len(pos_alphas)))   # lighter → darker reds
-
-    neg_alphas = sorted([a for a in alpha if float(a) < 0], key=lambda x: abs(float(x)))
-    blues = cm.Blues(np.linspace(0.4, 0.9, len(neg_alphas)))
-    # blues = cm.Blues(np.linspace(0.4, 0.9, len(neg_alphas))) # lighter → darker blues
-    plt.axhline(y=base_perplexity, linestyle="--", color="gray", linewidth=1.5,
-            label=rf"$\alpha$=0")
-    # Plot positives
-    for a, c in zip(pos_alphas, reds):
-        layer_names = [int(x["layer_name"].split('.')[-1]) for x in perplexities[a]]
-        avg_toxicities = [x["perplexity"] for x in perplexities[a]]
-        inx = np.argsort(layer_names)
-        ordered_l = np.array(layer_names)[inx]
-        ordered_av = np.array(avg_toxicities)[inx]
-        plt.plot(ordered_l, ordered_av, label=rf"$\alpha$={a}", color=c)
-
-    # Plot negatives
-    for a, c in zip(neg_alphas, blues):
-        layer_names = [int(x["layer_name"].split('.')[-1]) for x in perplexities[a]]
-        avg_toxicities = [x["perplexity"] for x in perplexities[a]]
-        inx = np.argsort(layer_names)
-        ordered_l = np.array(layer_names)[inx]
-        ordered_av = np.array(avg_toxicities)[inx]
-        plt.plot(ordered_l, ordered_av, label=rf"$\alpha$={a}", color=c)
-
-    
-    plt.xlabel("Layer ID")
-    plt.ylabel("Perplexity")
-    plt.title(f"Results for {safe_model_name}")
-    plt.legend(title=r"$\alpha$ (steering strength)", loc="upper right")
-    plt.xticks(ordered_l, rotation=45)
-    plt.tight_layout()
-    plt.savefig(f"/home/fe/purelku/Desktop/Master_thesis/results_steering_plot/{safe_model_name}_perplexity_results.png", dpi=300)
-    plt.savefig(f"/home/fe/purelku/Desktop/Master_thesis/results_steering_plot/{safe_model_name}_perplexity_results.svg", format='svg')
-    plt.close()
-    
+    with open(os.path.join(save_dir, "base_perplexity.json"), "w") as f:
+        json.dump({"base_perplexity": base_perplexity}, f)
 
    
 
@@ -421,8 +386,8 @@ if __name__ == "__main__":
     for i, model in enumerate(["google/gemma-2-2b", "meta-llama/Llama-3.2-3B"]): #"google/gemma-2-2b-it",
         args = parse_args()
         args.model = model
-        alpha = [ -1.0, -5.0, -10.0]#, -20.0] #-0.1, -0.3, -0.6, -0.9, -1.5, -2.0, -2.5, -3.0, -4.0, -4.5
-        alpha += [1.0, 5.0, 10.0]#, 20.0] #[0.1, 0.3, 0.6, 0.9, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 4.5, 5.0, 10.0] 
+        alpha = [-0.5, -1.0, -1.5, -2.0, -2.5, -3.0, -3.5, -4.0, -4.5, -5.0, -10.0]
+        alpha += [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 10.0]
         print(f"Running evaluation for model: {args.model} with alphas: {alpha}")
         # for a in alpha:
         args.alpha = alpha

@@ -367,7 +367,7 @@ def main(args):
 
     
     out_file = os.path.join(
-        args.output_dir, f"{safe_model_name}/eval_toxicity.csv"
+        args.output_dir, f"{safe_model_name}/eval_toxicity_new.csv"
     )
     df.to_csv(out_file, index=False, sep=";")
     print("Saved results →", out_file)
@@ -375,7 +375,7 @@ def main(args):
     # labels_f = {'labels': cls_results}
     # np.save(labels_f, f"{args.output_dir}/{safe_model_name}/labels.npy")
     labels_f = np.array(cls_results)
-    np.save(f"{args.output_dir}/{safe_model_name}/labels.npy", labels_f)
+    np.save(f"{args.output_dir}/{safe_model_name}/labels_new.npy", labels_f)
 
 
 
