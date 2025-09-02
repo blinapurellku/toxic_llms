@@ -18,7 +18,7 @@ import torch
 from accelerate.utils import find_executable_batch_size
 from datasets import load_dataset
 from safetensors.torch import save_file as save_safetensors
-from templates import LLAMA_CLS_PROMPT, get_template
+from templates import LLAMA_CLS_PROMPT, get_template, MISTRAL_CLS_PROMPT
 from tqdm import tqdm
 from transformers import (AutoModelForCausalLM, AutoTokenizer,
                           BitsAndBytesConfig)
@@ -183,7 +183,7 @@ def classify_generation(
         cls_model_id, padding_side="left", truncation_side="left"
     )
 
-    templ = LLAMA_CLS_PROMPT["prompt"]
+    templ = MISTRAL_CLS_PROMPT["prompt"]
     combined_inputs = [
         templ.format(behavior=u, generation=v) for u, v in zip(prompts, responses)
     ]
