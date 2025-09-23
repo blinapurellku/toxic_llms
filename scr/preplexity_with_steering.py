@@ -57,7 +57,7 @@ def load_model_and_tokenizer(model_name: str, base_model: bool = False, bnb_conf
     print(f"Loading model: {model_name}")
     hf_token = os.getenv("HUGGINGFACEHUB_API_TOKEN")
     tokenizer = AutoTokenizer.from_pretrained(
-        model_name, padding_side="left", truncation_side="left", token=hf_token,
+        model_name, padding_side="left", truncation_side="left", token=hf_token, cache_dir="/hf",
     )
     if bnb_config is not None:
         model = AutoModelForCausalLM.from_pretrained(
@@ -66,6 +66,7 @@ def load_model_and_tokenizer(model_name: str, base_model: bool = False, bnb_conf
             quantization_config=bnb_config,
             device_map=device, #"auto",
             token=hf_token,
+            cache_dir="/hf",
         ).eval()
     else:
         model = AutoModelForCausalLM.from_pretrained(
@@ -73,6 +74,7 @@ def load_model_and_tokenizer(model_name: str, base_model: bool = False, bnb_conf
             torch_dtype=torch.bfloat16,
             device_map=device,  # "auto",
             token=hf_token,
+            cache_dir="/hf",
         ).eval()
 
     if tokenizer.pad_token is None:
@@ -274,7 +276,7 @@ def main(args):
         print("Using template", template["description"])
 
     print("Loading the HarmBench dataset")
-    dataset = load_dataset("walledai/HarmBench", "standard", token=os.getenv("HUGGINGFACEHUB_API_TOKEN"))["train"]
+    dataset = load_dataset("walledai/HarmBench", "standard", token=os.getenv("HUGGINGFACEHUB_API_TOKEN"), cache_dir="/hf")["train"]
     count = min(args.num_prompts, len(dataset))
     prompts = [ex["prompt"] for ex in dataset.select(range(count))]
     print(f"Loaded {len(prompts)} prompts from HarmBench dataset.")
@@ -438,6 +440,8 @@ if __name__ == "__main__":
     # args.model = model
     alpha = [-0.5, -1.0, -1.5, -2.0, -2.5, -3.0, -3.5, -4.0, -4.5, -5.0, -10.0]
     alpha += [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 10.0]
+    alpha += [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45]
+    alpha += [-0.05, -0.1, -0.15, -0.2, -0.25, -0.3, -0.35, -0.4, -0.45]
     print(f"Running evaluation for model: {args.model} with alphas: {alpha}")
     # for a in alpha:
     args.alpha = alpha

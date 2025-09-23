@@ -54,7 +54,7 @@ def load_model_and_tokenizer(model_name: str, base_model: bool = False, bnb_conf
     print(f"Loading model: {model_name}")
     hf_token = os.getenv("HUGGINGFACEHUB_API_TOKEN")
     tokenizer = AutoTokenizer.from_pretrained(
-        model_name, padding_side="left", truncation_side="left", token=hf_token,
+        model_name, padding_side="left", truncation_side="left", token=hf_token, cache_dir="/hf",
     )
     if bnb_config is not None:
         model = AutoModelForCausalLM.from_pretrained(
@@ -63,6 +63,7 @@ def load_model_and_tokenizer(model_name: str, base_model: bool = False, bnb_conf
             quantization_config=bnb_config,
             device_map=device, #"auto",
             token=hf_token,
+            cache_dir="/hf",
         ).eval()
     else:
         model = AutoModelForCausalLM.from_pretrained(
@@ -70,6 +71,7 @@ def load_model_and_tokenizer(model_name: str, base_model: bool = False, bnb_conf
             torch_dtype=torch.bfloat16,
             device_map=device,  # "auto",
             token=hf_token,
+            cache_dir="/hf",
         ).eval()
 
     if tokenizer.pad_token is None:
@@ -330,7 +332,7 @@ def main(args):
         )
         print("Using template", template["description"])
     # print("Loading the HarmBench dataset")
-    dataset = load_dataset("walledai/HarmBench", "standard", token=os.getenv("HUGGINGFACEHUB_API_TOKEN"))["train"]
+    dataset = load_dataset("walledai/HarmBench", "standard", token=os.getenv("HUGGINGFACEHUB_API_TOKEN"), cache_dir="/hf")["train"]
     count = min(args.num_prompts, len(dataset))
     prompts = [ex["prompt"] for ex in dataset.select(range(count))]
     print(f"Loaded {len(prompts)} prompts from HarmBench dataset.") 
@@ -467,9 +469,10 @@ def main(args):
         torch_dtype=torch.bfloat16, #if torch.cuda.is_available() else torch.float32,
         device_map=device,  # "auto",
         token=os.getenv("HUGGINGFACEHUB_API_TOKEN"),
+        cache_dir="/hf",
     ).eval()
     cls_tokenizer = AutoTokenizer.from_pretrained(
-        args.cls_model, padding_side="left", truncation_side="left", token=os.getenv("HUGGINGFACEHUB_API_TOKEN")
+        args.cls_model, padding_side="left", truncation_side="left", token=os.getenv("HUGGINGFACEHUB_API_TOKEN"), cache_dir="/hf",
     )
     
     # res = []
