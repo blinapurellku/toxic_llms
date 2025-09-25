@@ -1,11 +1,12 @@
 import argparse
 
+import json
 import os
 import re
 
 
 import torch
-
+import pandas as pd
 
 os.environ["TORCHINDUCTOR_DISABLE"] = "1"
 os.environ["TORCH_COMPILE"] = "0"
@@ -94,37 +95,49 @@ def main(args):
     print(f"Mean toxicity label: {avg_label:.3f}, {sum(valid_lab)}/{len(labels_before)} , valid responses: {len(valid_lab)}")
     # 2) Build a lookup of ALL named modules in the model
     res = {}
+    with open(os.path.join(save_path, "steered_perplexities.json")) as f:
+        perplexities = json.load(f)
+    # print(perplexities.keys())
+    with open(os.path.join(save_path, "base_perplexity.json")) as f:
+        base_perplexity = json.load(f)["base_perplexity"]
+    all_p = {}
     for a in args.alpha: 
         res[a] = []
+        # for x in perplexities[a]:
+            # all_p = {x["layer_name"]: x["perplexity"]}
         labels_after = np.load(f"{args.output_dir}/{safe_model_name}/labels_steering_{side}_alpha_{a}.npy", allow_pickle=True).item()
-        for layer_name in (list(labels_after.keys())):
+        layer_names = list(labels_after.keys())
+        layer_names = sorted(list(labels_after.keys()), key=lambda x: int(x.split('.')[-1]))
+        for layer_name in layer_names:
             valid_lab = [r for r in labels_after[layer_name] if r != -1]
-            print(a, layer_name)
-            print(len(valid_lab), len(labels_after[layer_name]))
+            # print(a, layer_name)
+            # print(len(valid_lab), len(labels_after[layer_name]))
             avg_l = sum(valid_lab) / len(labels_after[layer_name])
             res[a].append(
                 {
                     "layer_name": layer_name,
                     "avg_toxicity": avg_l,
+                    # "perplexity": all_p[layer_name],
                 }
             )
 
-   
+
 
     
+    
 
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(10, 8))
 
     # Separate alphas into positive and negative
     alphas = sorted(res.keys(), key=float)  # sort for consistency
     pos_alphas = [a for a in alphas if float(a) > 0]
     neg_alphas = [a for a in alphas if float(a) < 0]
-
+    # print(alphas)
     # Create color maps: Reds for positive, Blues for negative
-    reds = cm.Reds(np.linspace(0.4, 0.9, len(pos_alphas)))   # lighter → darker reds
+    reds = cm.Reds(np.linspace(0.2, 0.9, len(pos_alphas)))   # lighter → darker reds
 
     neg_alphas = sorted([a for a in alphas if float(a) < 0], key=lambda x: abs(float(x)))
-    blues = cm.Blues(np.linspace(0.4, 0.9, len(neg_alphas)))
+    blues = cm.Blues(np.linspace(0.2, 0.9, len(neg_alphas)))
     # blues = cm.Blues(np.linspace(0.4, 0.9, len(neg_alphas))) # lighter → darker blues
     plt.axhline(y=avg_label, linestyle="--", color="gray", linewidth=1.5,
             label=rf"$\alpha$=0")
@@ -150,13 +163,78 @@ def main(args):
     plt.xlabel("Layer ID")
     plt.ylabel("Average Toxicity")
     plt.title(f"Steering Results for {safe_model_name}")
-    plt.legend(title=r"$\alpha$ (steering strength)", loc="upper right")
+    plt.legend(title=r"$\alpha$ (steering strength)", bbox_to_anchor=(1.05, 1.05), ncol=2)
     plt.xticks(ordered_l, rotation=45)
     plt.tight_layout()
-    plt.savefig(f"/home/fe/purelku/Desktop/Master_thesis/results_steering_plot/{safe_model_name}_steering_results.png", dpi=300)
-    plt.savefig(f"/home/fe/purelku/Desktop/Master_thesis/results_steering_plot/{safe_model_name}_steering_results.svg", format='svg')
+    plt.savefig(f"/home/fe/purelku/Desktop/Master_thesis/results_steering_plot/{safe_model_name}_steering_results_.png", dpi=300)
+    # plt.savefig(f"/home/fe/purelku/Desktop/Master_thesis/results_steering_plot/{safe_model_name}_steering_results.svg", format='svg')
     plt.close()
 
+
+        
+    # # ---------- Flatten to a DataFrame ----------
+    # rows = []
+    # for a, lst in res.items():
+    #     for d in lst:
+    #         rows.append({"alpha": float(a), **d})
+    # df = pd.DataFrame(rows).dropna(subset=["perplexity", "avg_toxicity"])
+
+    # # ---------- Map encodings ----------
+    # # size ~ alpha (normalized to a nice pixel range)
+    # size_min, size_max = 80, 800
+    # if df["alpha"].max() == df["alpha"].min():
+    #     sizes = np.full(len(df), (size_min + size_max) / 2.0)
+    # else:
+    #     alpha_norm = (df["alpha"] - df["alpha"].min()) / (df["alpha"].max() - df["alpha"].min())
+    #     sizes = size_min + alpha_norm * (size_max - size_min)
+
+    # # color ~ layer (categorical)
+    # layers, layer_codes = np.unique(df["layer_name"].astype(str).values, return_inverse=True)
+
+    # # ---------- Plot ----------
+    # plt.figure(figsize=(10, 7))
+    # sc = plt.scatter(
+    #     df["perplexity"], df["avg_toxicity"],
+    #     s=sizes,
+    #     c=layer_codes,
+    #     alpha=0.8,
+    #     edgecolors="k",
+    #     linewidths=0.5,
+    # )
+
+    # # Base perplexity reference
+    # plt.axvline(base_perplexity, linestyle="--", linewidth=1, alpha=0.7)
+    # plt.text(base_perplexity, plt.ylim()[1], "  base perplexity", va="top", ha="left")
+
+    # # Axis labels & title
+    # plt.xlabel("Perplexity")
+    # plt.ylabel("Average toxicity")
+    # plt.title("Perplexity vs. Toxicity by Layer & Steering Strength")
+
+    # # Size legend (for alpha)
+
+    # sample_alphas = np.unique(np.round(np.linspace(df["alpha"].min(), df["alpha"].max(), 3), 3))
+    # sample_sizes = size_min + ((sample_alphas - df["alpha"].min()) /
+    #                         (df["alpha"].max() - df["alpha"].min() if df["alpha"].max() != df["alpha"].min() else 1)
+    #                         ) * (size_max - size_min)
+    # h = [plt.scatter([], [], s=s, edgecolors="k") for s in sample_sizes]
+    # plt.legend(h, [f"α = {a:g}" for a in sample_alphas], title="Steering strength", scatterpoints=1, frameon=True, loc="upper left", bbox_to_anchor=(1.02, 1))
+
+    # # Color legend (for layer)
+    # cmap = sc.get_cmap()
+    # norm = sc.norm
+    # layer_handles = []
+    # layer_labels = []
+    # for i, name in enumerate(layers):
+    #     layer_handles.append(plt.Line2D([0], [0], marker="o", linestyle="", markeredgecolor="k",
+    #                                     markerfacecolor=cmap(norm(i))))
+    #     layer_labels.append(str(name))
+    # plt.legend(layer_handles, layer_labels, title="Layer", loc="lower left", bbox_to_anchor=(1.02, 0))
+    # plt.gca().add_artist(plt.gca().get_legend_handles_labels()[0][0])  # keep the first legend
+
+    # plt.grid(True, linestyle="--", alpha=0.35)
+    # plt.tight_layout()
+    # plt.show()
 
 
     
@@ -168,11 +246,18 @@ def main(args):
 
 
 if __name__ == "__main__":
-    for i, model in enumerate(["google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct", "google/gemma-2-2b", "meta-llama/Llama-3.2-3B"]): #"google/gemma-2-2b-it",
+    # for i, model in enumerate(["allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct", "allenai/OLMo-2-0425-1B"]):
+         #["google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct", "google/gemma-2-2b", "meta-llama/Llama-3.2-3B"]): #"google/gemma-2-2b-it",
+    for i, model in enumerate(["allenai/OLMo-2-0425-1B"]):
         args = parse_args()
         args.model = model
-        alpha = [-0.5, -1.0, -1.5, -2.0, -2.5, -3.0, -3.5, -4.0, -4.5, -5.0, -10.0]
-        alpha += [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 10.0]  
+        alpha = [-0.09, -0.08, -0.07, -0.06, -0.05, -0.04, -0.03, -0.02, -0.01]
+        alpha += [0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09]
+
+        # alpha += [-0.5, -1.0, -1.5, -2.0, -2.5, -3.0, -3.5, -4.0, -4.5, -5.0]
+        alpha += [0.05, 0.1, 0.15, 0.2, 0.25]#, 0.3, 0.35, 0.4]
+        alpha += [-0.05, -0.1, -0.15, -0.2, -0.25]#, -0.3, -0.35, -0.4]
+        # alpha += [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]  
         print(f"Running evaluation for model: {args.model} with alphas: {alpha}")
         args.alpha = alpha
         main(args)

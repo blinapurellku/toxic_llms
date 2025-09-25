@@ -209,7 +209,8 @@ def bootstrap_disentanglement_ratio(features, labels, n_bootstrap=100):
 
 def parse_args():
     p = argparse.ArgumentParser("Evaluate LLM for harmful behavior on HarmBench.")
-    p.add_argument("--models", default=["meta-llama/Llama-3.2-3B", "meta-llama/Llama-3.2-3B-Instruct", "google/gemma-2-2b", "google/gemma-2-2b-it"] ) # meta-llama/Llama-3.1-8B, google/gemma-2-2b-it, meta-llama/Llama-3.2-3B-Instruct, meta-llama/Llama-3.2-3B, google/gemma-7b
+    p.add_argument("--models", default=["allenai/OLMo-2-0425-1B", "allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct"])
+    #["meta-llama/Llama-3.2-3B", "meta-llama/Llama-3.2-3B-Instruct", "google/gemma-2-2b","google/gemma-2-2b-it"] )#["allenai/OLMo-2-0425-1B", "allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct"] ) # meta-llama/Llama-3.1-8B, google/gemma-2-2b-it, meta-llama/Llama-3.2-3B-Instruct, meta-llama/Llama-3.2-3B, google/gemma-7b
     p.add_argument("--cls_model", default="cais/HarmBench-Llama-2-13b-cls") #cais/HarmBench-Llama-2-13b-cls, cais/HarmBench-Mistral-7b-val-cls
 
     p.add_argument(
@@ -266,12 +267,15 @@ def main():
             os.path.join(save_path, f"hidden_states_pure.safetensors")
         )
 
-        hidden_states_steered = load_safetensors(
-            os.path.join(save_path, f"hidden_states_pure_steered.safetensors")
-        )
+        # hidden_states_steered = load_safetensors(
+        #     os.path.join(save_path, f"hidden_states_pure.safetensors")
+        # )
+        hidden_states_steered = hidden_states.copy()
         side = 'toxic'
         alpha = 1
-        labels_steered = np.load(rf"{args.output_dir}/{safe_model_name}/labels_after_{side}_{alpha}.npy", allow_pickle=True).item()[layers_steered[i]]
+        # labels_steered = np.load(rf"{args.output_dir}/{safe_model_name}/labels_after_{side}_{alpha}.npy", allow_pickle=True).item()[layers_steered[i]]
+        
+        labels_steered = labels.copy()
         # print(labels_steered[layers_steered[i]])
 
         # attn_patterns = torch.load(
@@ -457,150 +461,150 @@ def main():
         #     }
 
     # Plotting
-    # colors = ['blue', 'orange', 'green', 'red']
-    # plt.figure(figsize=(16, 14))
-    # plt.subplot(3, 2, 1)
-    # plt.title("Adjusted Rand Index per Layer")
-    # plt.xlabel("Layer")
-    # # plt.ylabel("Disentanglement Ratio")
-    # plt.ylabel("Adjusted Rand Index")
-    # for i, model_name in enumerate(models):
-    #     # layers = list(sil_dict.keys())
-    #     layers = [l.split('.')[-1] for l in list(ari_by_model[model_name].keys())]  # Extract layer number from name
-    #     silhouettes = list(ari_by_model[model_name].values())
+    colors = ['blue', 'orange', 'green', 'red']
+    plt.figure(figsize=(16, 14))
+    plt.subplot(3, 2, 1)
+    plt.title("Adjusted Rand Index per Layer")
+    plt.xlabel("Layer")
+    # plt.ylabel("Disentanglement Ratio")
+    plt.ylabel("Adjusted Rand Index")
+    for i, model_name in enumerate(models):
+        # layers = list(sil_dict.keys())
+        layers = [l.split('.')[-1] for l in list(ari_by_model[model_name].keys())]  # Extract layer number from name
+        silhouettes = list(ari_by_model[model_name].values())
 
-    #     layers_s = [l.split('.')[-1] for l in list(ari_by_model[model_name+'s'].keys())]
-    #     silhouettes_s = list(ari_by_model[model_name+'s'].values())
+        layers_s = [l.split('.')[-1] for l in list(ari_by_model[model_name+'s'].keys())]
+        silhouettes_s = list(ari_by_model[model_name+'s'].values())
 
-    #     # plt.plot(layers, silhouettes, color=colors[i], label=model_name.split("/")[-1], marker='.')
-    #     plt.plot(layers_s, silhouettes_s, color=colors[i], label=model_name.split("/")[-1] + " steered", marker='.', linestyle='--')
-    # # plt.grid(True, linestyle="--", alpha=0.5)
-    # plt.xticks(rotation=90)
-    # plt.legend()
+        # plt.plot(layers, silhouettes, color=colors[i], label=model_name.split("/")[-1], marker='.')
+        plt.plot(layers_s, silhouettes_s, color=colors[i], label=model_name.split("/")[-1] , marker='.', linestyle='--')
+    # plt.grid(True, linestyle="--", alpha=0.5)
+    plt.xticks(rotation=90)
+    plt.legend()
 
-    # plt.subplot(3, 2, 2)
-    # plt.title("Silhouette Score per Layer")
-    # plt.xlabel("Layer")
-    # plt.ylabel("Silhouette Score")
-    # for i, model_name in enumerate(models):
-    #     # layers = list(sil_dict.keys())
-    #     layers = [l.split('.')[-1] for l in list(silhouette_by_model[model_name].keys())]
-    #     silhouettes = list(silhouette_by_model[model_name].values())
+    plt.subplot(3, 2, 2)
+    plt.title("Silhouette Score per Layer")
+    plt.xlabel("Layer")
+    plt.ylabel("Silhouette Score")
+    for i, model_name in enumerate(models):
+        # layers = list(sil_dict.keys())
+        layers = [l.split('.')[-1] for l in list(silhouette_by_model[model_name].keys())]
+        silhouettes = list(silhouette_by_model[model_name].values())
 
-    #     layers_s = [l.split('.')[-1] for l in list(silhouette_by_model[model_name+'s'].keys())]
-    #     silhouettes_s = list(silhouette_by_model[model_name+'s'].values())
-    #     # plt.plot(layers, silhouettes, color=colors[i], label=model_name.split("/")[-1], marker='.')
-    #     plt.plot(layers_s, silhouettes_s, color=colors[i], label=model_name.split("/")[-1] + " steered", marker='.', linestyle='--')
-    # # plt.grid(True, linestyle="--", alpha=0.5)
-    # plt.xticks(rotation=90)
-    # plt.legend()
+        layers_s = [l.split('.')[-1] for l in list(silhouette_by_model[model_name+'s'].keys())]
+        silhouettes_s = list(silhouette_by_model[model_name+'s'].values())
+        # plt.plot(layers, silhouettes, color=colors[i], label=model_name.split("/")[-1], marker='.')
+        plt.plot(layers_s, silhouettes_s, color=colors[i], label=model_name.split("/")[-1], marker='.', linestyle='--')
+    # plt.grid(True, linestyle="--", alpha=0.5)
+    plt.xticks(rotation=90)
+    plt.legend()
 
-    # plt.subplot(3, 2, 3)
-    # plt.title("Euclidean Distance per Layer")
-    # plt.xlabel("Layer")
-    # plt.ylabel("Distance")
+    plt.subplot(3, 2, 3)
+    plt.title("Euclidean Distance per Layer")
+    plt.xlabel("Layer")
+    plt.ylabel("Distance")
     
-    # for i, model_name in enumerate(models): 
-    #     # layers = list(dist_dict.keys())
-    #     layers = [l.split('.')[-1] for l in list(ecl_distance_by_model[model_name].keys())]
-    #     distances = [d[0] for d in ecl_distance_by_model[model_name].values()]
-    #     stds = [d[1] for d in ecl_distance_by_model[model_name].values()]
+    for i, model_name in enumerate(models): 
+        # layers = list(dist_dict.keys())
+        layers = [l.split('.')[-1] for l in list(ecl_distance_by_model[model_name].keys())]
+        distances = [d[0] for d in ecl_distance_by_model[model_name].values()]
+        stds = [d[1] for d in ecl_distance_by_model[model_name].values()]
 
-    #     layers_s = [l.split('.')[-1] for l in list(ecl_distance_by_model[model_name+'s'].keys())]
-    #     dist_s = [d[0] for d in ecl_distance_by_model[model_name+'s'].values()]
-    #     # distances = list(dist_dict.values())
-    #     # plt.plot(layers, distances[0], label=model_name, marker='o')
-    #     # plt.plot(layers, distances, color=colors[i], label=model_name.split("/")[-1], marker='.')
-    #     plt.plot(layers_s, dist_s, color=colors[i], label=model_name.split("/")[-1] + " steered", marker='.', linestyle='--')
-    #     # plt.fill_between(layers,
-    #     #              np.array(distances) - np.array(stds)/2,
-    #     #              np.array(distances) + np.array(stds)/2,
-    #     #              alpha=0.2)
-    # # plt.grid(True, linestyle="--", alpha=0.5)
-    # plt.xticks(rotation=90)
-    # plt.legend()
+        layers_s = [l.split('.')[-1] for l in list(ecl_distance_by_model[model_name+'s'].keys())]
+        dist_s = [d[0] for d in ecl_distance_by_model[model_name+'s'].values()]
+        # distances = list(dist_dict.values())
+        # plt.plot(layers, distances[0], label=model_name, marker='o')
+        # plt.plot(layers, distances, color=colors[i], label=model_name.split("/")[-1], marker='.')
+        plt.plot(layers_s, dist_s, color=colors[i], label=model_name.split("/")[-1], marker='.', linestyle='--')
+        # plt.fill_between(layers,
+        #              np.array(distances) - np.array(stds)/2,
+        #              np.array(distances) + np.array(stds)/2,
+        #              alpha=0.2)
+    # plt.grid(True, linestyle="--", alpha=0.5)
+    plt.xticks(rotation=90)
+    plt.legend()
 
-    # plt.subplot(3, 2, 4)
-    # plt.title("Cosine Distance per Layer")
-    # plt.xlabel("Layer")
-    # plt.ylabel("Distance")
-    # for i, model_name in enumerate(models):
-    #     # layers = list(dist_dict.keys())
-    #     layers = [l.split('.')[-1] for l in list(distance_by_model[model_name].keys())]
-    #     distances = [d[0] for d in distance_by_model[model_name].values()]
-    #     stds = [d[1] for d in distance_by_model[model_name].values()]
+    plt.subplot(3, 2, 4)
+    plt.title("Cosine Distance per Layer")
+    plt.xlabel("Layer")
+    plt.ylabel("Distance")
+    for i, model_name in enumerate(models):
+        # layers = list(dist_dict.keys())
+        layers = [l.split('.')[-1] for l in list(distance_by_model[model_name].keys())]
+        distances = [d[0] for d in distance_by_model[model_name].values()]
+        stds = [d[1] for d in distance_by_model[model_name].values()]
 
-    #     layers_s = [l.split('.')[-1] for l in list(distance_by_model[model_name+'s'].keys())]
-    #     dist_s = [d[0] for d in distance_by_model[model_name+'s'].values()]
-    #     # plt.plot(layers, distances[0], label=model_name, marker='o')
-    #     # plt.plot(layers, distances, color=colors[i], label=model_name.split("/")[-1], marker='.')
-    #     plt.plot(layers_s, dist_s, color=colors[i], label=model_name.split("/")[-1] + " steered", marker='.', linestyle='--')
+        layers_s = [l.split('.')[-1] for l in list(distance_by_model[model_name+'s'].keys())]
+        dist_s = [d[0] for d in distance_by_model[model_name+'s'].values()]
+        # plt.plot(layers, distances[0], label=model_name, marker='o')
+        # plt.plot(layers, distances, color=colors[i], label=model_name.split("/")[-1], marker='.')
+        plt.plot(layers_s, dist_s, color=colors[i], label=model_name.split("/")[-1] , marker='.', linestyle='--')
 
-    #     # plt.fill_between(layers,
-    #     #              np.array(distances) - np.array(stds)/2,
-    #     #              np.array(distances) + np.array(stds)/2,
-    #     #              alpha=0.2)
-    # # plt.grid(True, linestyle="--", alpha=0.5)
-    # plt.xticks(rotation=90)
-    # plt.legend()
+        # plt.fill_between(layers,
+        #              np.array(distances) - np.array(stds)/2,
+        #              np.array(distances) + np.array(stds)/2,
+        #              alpha=0.2)
+    # plt.grid(True, linestyle="--", alpha=0.5)
+    plt.xticks(rotation=90)
+    plt.legend()
 
-    # plt.subplot(3, 2, 5)
-    # plt.title("Z-score per Layer")
-    # plt.xlabel("Layer")
-    # plt.ylabel("Z-score")
-    # for i, model_name in enumerate(models): 
-    #     # layers = list(dist_dict.keys())
-    #     layers = [l.split('.')[-1] for l in list(dis_ratio_model[model_name].keys())]
-    #     distances = [d[1] for d in dis_ratio_model[model_name].values()]
-    #     stds = [d[1] for d in dis_ratio_model[model_name].values()]
+    plt.subplot(3, 2, 5)
+    plt.title("Z-score per Layer")
+    plt.xlabel("Layer")
+    plt.ylabel("Z-score")
+    for i, model_name in enumerate(models): 
+        # layers = list(dist_dict.keys())
+        layers = [l.split('.')[-1] for l in list(dis_ratio_model[model_name].keys())]
+        distances = [d[1] for d in dis_ratio_model[model_name].values()]
+        stds = [d[1] for d in dis_ratio_model[model_name].values()]
 
-    #     layers_s = [l.split('.')[-1] for l in list(dis_ratio_model[model_name+'s'].keys())]
-    #     dist_s = [d[1] for d in dis_ratio_model[model_name+'s'].values()]
-    #     # plt.plot(layers, distances[0], label=model_name, marker='o')
-    #     # plt.plot(layers, distances, color=colors[i], label=model_name.split("/")[-1], marker='.')
-    #     plt.plot(layers_s, dist_s, color=colors[i], label=model_name.split("/")[-1] + " steered", marker='.', linestyle='--')
-    #     # plt.errorbar(layers, distances, yerr=stds, fmt='o', linestyle='-', capsize=3, alpha=0.5, label=model_name.split("/")[-1])
-    #     # plt.fill_between(layers,
-    #     #              np.array(distances) - np.array(stds)/2,
-    #     #              np.array(distances) + np.array(stds)/2,
-    #     #              alpha=0.2)
-    # # plt.grid(True, linestyle="--", alpha=0.5)
-    # plt.xticks(rotation=90)
-    # plt.legend()
+        layers_s = [l.split('.')[-1] for l in list(dis_ratio_model[model_name+'s'].keys())]
+        dist_s = [d[1] for d in dis_ratio_model[model_name+'s'].values()]
+        # plt.plot(layers, distances[0], label=model_name, marker='o')
+        # plt.plot(layers, distances, color=colors[i], label=model_name.split("/")[-1], marker='.')
+        plt.plot(layers_s, dist_s, color=colors[i], label=model_name.split("/")[-1], marker='.', linestyle='--')
+        # plt.errorbar(layers, distances, yerr=stds, fmt='o', linestyle='-', capsize=3, alpha=0.5, label=model_name.split("/")[-1])
+        # plt.fill_between(layers,
+        #              np.array(distances) - np.array(stds)/2,
+        #              np.array(distances) + np.array(stds)/2,
+        #              alpha=0.2)
+    # plt.grid(True, linestyle="--", alpha=0.5)
+    plt.xticks(rotation=90)
+    plt.legend()
 
-    # plt.subplot(3, 2, 6)
-    # plt.title(" Fisher Discriminant Ratio per Layer")
-    # plt.xlabel("Layer")
-    # plt.ylabel("Fisher Ratio")
-    # for i, model_name in enumerate(models): 
-    #     # layers = list(dist_dict.keys())
-    #     model_name = model_name
-    #     layers = [l.split('.')[-1] for l in list(dis_ratio_model[model_name].keys())]
-    #     distances = [d[2] for d in dis_ratio_model[model_name].values()]
-    #     # stds = [d[1] for d in dist_dict.values()]
+    plt.subplot(3, 2, 6)
+    plt.title(" Fisher Discriminant Ratio per Layer")
+    plt.xlabel("Layer")
+    plt.ylabel("Fisher Ratio")
+    for i, model_name in enumerate(models): 
+        # layers = list(dist_dict.keys())
+        model_name = model_name
+        layers = [l.split('.')[-1] for l in list(dis_ratio_model[model_name].keys())]
+        distances = [d[2] for d in dis_ratio_model[model_name].values()]
+        # stds = [d[1] for d in dist_dict.values()]
 
-    #     layers_s = [l.split('.')[-1] for l in list(dis_ratio_model[model_name+'s'].keys())]
-    #     dist_s = [d[2] for d in dis_ratio_model[model_name+'s'].values()]
-    #     # plt.plot(layers, distances[0], label=model_name, marker='o')
-    #     # plt.plot(layers, distances, color=colors[i], label=model_name.split("/")[-1], marker='.')
-    #     plt.plot(layers_s, dist_s, color=colors[i], label=model_name.split("/")[-1] + " steered", marker='.', linestyle='--')
-    #     # plt.errorbar(layers, distances, yerr=stds, fmt='o', linestyle='-', capsize=3, alpha=0.5, label=model_name.split("/")[-1])
-    #     # plt.fill_between(layers,
-    #     #              np.array(distances) - np.array(stds)/2,
-    #     #              np.array(distances) + np.array(stds)/2,
-    #     #              alpha=0.2)
-    # # plt.grid(True, linestyle="--", alpha=0.5)
-    # plt.xticks(rotation=90)
-    # plt.legend()
+        layers_s = [l.split('.')[-1] for l in list(dis_ratio_model[model_name+'s'].keys())]
+        dist_s = [d[2] for d in dis_ratio_model[model_name+'s'].values()]
+        # plt.plot(layers, distances[0], label=model_name, marker='o')
+        # plt.plot(layers, distances, color=colors[i], label=model_name.split("/")[-1], marker='.')
+        plt.plot(layers_s, dist_s, color=colors[i], label=model_name.split("/")[-1], marker='.', linestyle='--')
+        # plt.errorbar(layers, distances, yerr=stds, fmt='o', linestyle='-', capsize=3, alpha=0.5, label=model_name.split("/")[-1])
+        # plt.fill_between(layers,
+        #              np.array(distances) - np.array(stds)/2,
+        #              np.array(distances) + np.array(stds)/2,
+        #              alpha=0.2)
+    # plt.grid(True, linestyle="--", alpha=0.5)
+    plt.xticks(rotation=90)
+    plt.legend()
     
-    # plt.tight_layout()
-    # # plt.savefig("separability_steering.png")
-    # # plt.savefig(os.path.join(save_path, "linear_probe_performance.png"))
+    plt.tight_layout()
+    plt.savefig("separability_steeering.png")
+    # plt.savefig(os.path.join(save_path, "linear_probe_performance.png"))
 
 
-    
+
     k = "euclidean" #, "entropy", "sum_to_last", "sum", "max" euclidean cosine
-    v = "max" # "max" "mean"
+    v = "mean" # "max" "mean"
 
     plt.figure(figsize=(16, 14))
     iterator = 1
@@ -775,4 +779,5 @@ def main():
 
 
 if __name__ == "__main__":
+    # models = ["allenai/OLMo-2-0425-1B", "allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct"]
     main()

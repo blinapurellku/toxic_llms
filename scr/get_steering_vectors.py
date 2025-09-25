@@ -45,7 +45,7 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 def parse_args():
     p = argparse.ArgumentParser("Evaluate LLM for harmful behavior on HarmBench.")
-    p.add_argument("--model", default="google/gemma-2-2b-it") # meta-llama/Llama-3.1-8B, google/gemma-2-2b-it, meta-llama/Llama-3.2-3B-Instruct, meta-llama/Llama-3.2-3B, google/gemma-7b
+    p.add_argument("--model", default="allenai/OLMo-2-0425-1B") # meta-llama/Llama-3.1-8B, google/gemma-2-2b-it, meta-llama/Llama-3.2-3B-Instruct, meta-llama/Llama-3.2-3B, google/gemma-7b
     p.add_argument("--cls_model", default="cais/HarmBench-Llama-2-13b-cls") #cais/HarmBench-Llama-2-13b-cls, cais/HarmBench-Mistral-7b-val-cls
 
     p.add_argument(
@@ -77,8 +77,8 @@ def parse_args():
     return p.parse_args()
 
 
-def main():
-    args = parse_args()
+def main(args):
+    # args = parse_args()
 
     
 
@@ -122,6 +122,7 @@ def main():
         }
     
     torch.save(steering_vectors, os.path.join(save_path, "steering_vectors.pt"))
+    print(f"Steering vectors saved to {os.path.join(save_path, 'steering_vectors.pt')}")
 
     
     # layer_names = list(hidden_states.keys())
@@ -160,4 +161,12 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+    # models = ["google/gemma-2-2b-it", "google/gemma-2-2b", "meta-llama/Llama-3.2-3B", "meta-llama/Llama-3.2-3B-Instruct"]
+
+    # for model in models:
+    models = ["allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct"] #"allenai/OLMo-2-0425-1B"
+    for model in models:
+        args.model=model
+        main(args)
+    # main()

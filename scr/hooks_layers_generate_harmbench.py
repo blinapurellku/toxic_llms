@@ -3,10 +3,12 @@ import argparse
 import gc
 import json
 import os
+# from random import random, choices
 import re
 from collections import defaultdict
 from contextlib import contextmanager
 from typing import Dict, List, Optional, Tuple, Union
+import random
 
 # Set environment variables to disable various optimizations
 os.environ["TORCHINDUCTOR_DISABLE"] = "1"
@@ -118,6 +120,7 @@ def load_model_and_tokenizer(
     return model, tokenizer
 
 
+
 @contextmanager
 def capture_all_layers(model,
                        move_to_cpu: bool = True,
@@ -143,7 +146,6 @@ def capture_all_layers(model,
             # if move_to_cpu:
             #     h = h.to("cpu", non_blocking=True)
             store[name].append(h.bfloat16())
-            print(store[name][-1].shape)
             return out
         return _hook
     
@@ -179,15 +181,13 @@ def capture_all_layers(model,
             print(f"Registering hook for {n}")
             handles.append(m.register_forward_hook(_factory(n)))
 
-    # for n, m in model.named_modules():
-    #     if n.startswith("model.model.layers.") or n.startswith("transformer.h."):
-    #         handles.append(m.register_forward_hook(_factory(n)))
 
     try:
         yield store
     finally:
         for h in handles:
             h.remove()
+
 
         
 
@@ -196,31 +196,37 @@ def run_prompting(
     model,
     tokenizer,
     prompts,
+    responses: Optional[List[str]] = None,
     base_model: bool = False,
+    starting_batch_size: int = 4,
     template: dict | None = None,
-    starting_batch_size: int = 64,
     atten: bool = False,
-    aggregate: str = None,
-    tmp_dir: str = "./tmp",
+    aggregate: str = None, # or sum
 ):
     """Generate logits **and** hidden states for *prompts* with auto‑batch‑size."""
-
     run_kwargs = {
+        # "max_new_tokens": max_new_tokens,
         "pad_token_id": tokenizer.pad_token_id,
-        # "output_hidden_states": True,
+        # "return_dict_in_generate": True,  # Return a more detailed output object
     }
-    # layer_names = _derive_layer_names(model)[1:]
+    
+    if responses is not None:
+        prompts = [p + r for p, r in zip(prompts, responses)]
+        print("here")
+
     with capture_all_layers(model, move_to_cpu=True, atten=atten) as acts:
         @find_executable_batch_size(starting_batch_size=starting_batch_size)
         def _inner(bs):
-            all_logits, all_masks = [], []
             all_hidden = defaultdict(list)  # Store hidden states    
-            id_ = 0
+            all_hidden_sum = defaultdict(list)  # Store hidden states
+            all_hidden_last = defaultdict(list)  # Store hidden states
             for i in tqdm(range(0, len(prompts), bs), desc=f"Generating (bs={bs})"):
-                
                 chunk = prompts[i : i + bs]
+                chunk_f = responses[i : i + bs] if responses else chunk
+
                 if base_model:
                     wrapped = chunk
+                    wrapped_f = chunk_f 
                 else:
                     if template is None:
                         raise ValueError(
@@ -228,96 +234,95 @@ def run_prompting(
                         )
                     wrapped = [template["prompt"].format(instruction=p) for p in chunk]
 
+                    wrapped_f = [template["prompt"].format(instruction=p) for p in chunk_f]
+
                 # enc = tokenizer(chunk, return_tensors="pt", padding=True).to(model.device)
                 enc = tokenizer(
                     wrapped, return_tensors="pt", padding=True, truncation=True
                 ).to(model.device)
-                # model.config.num_attention_heads
-                with torch.inference_mode():
-                    out = model(**enc, **run_kwargs)
-                    # print(acts)
-                for layer, tensors in acts.items():
-                    h_state = tensors[0].cpu() * enc.attention_mask.unsqueeze(-1).cpu()   # (B, L, 1)
-                    # print(tensors[0].shape)
-                    if atten: 
-                        H = model.config.num_attention_heads
-                        B, L, _ = h_state.shape
-                        h_state = h_state.view(B, L, H, -1).permute(0, 2, 1, 3)  # (B, H, L, HD)
 
-                        if aggregate == "sum":
-                            token_counts = enc.attention_mask.cpu().sum(dim=1).clamp(min=1)
-                            token_counts = token_counts.unsqueeze(1).unsqueeze(1)  # (B, 1, 1)
-                            h_state = h_state.sum(dim=2) / token_counts  # (B, H, HD)
+                enc_f = tokenizer(wrapped_f, return_tensors="pt", padding=True, truncation=True
+                )#.to(model.device)
+                try:
+                    with torch.inference_mode():
+                        out = model(**enc, **run_kwargs)
+                    for layer, tensors in acts.items():
+                        h_state = tensors[0].cpu() * enc.attention_mask.unsqueeze(-1).cpu()   # (B, L, 1)
+                        if atten: 
+                            H = model.config.num_attention_heads
+                            B, L, _ = h_state.shape
+                            h_state = h_state.view(B, L, H, -1).permute(0, 2, 1, 3)  # (B, H, L, HD)
+
+                            if aggregate == "sum":
+                                token_counts = enc.attention_mask.cpu().sum(dim=1).clamp(min=1)
+                                token_counts = token_counts.unsqueeze(1).unsqueeze(1)  # (B, 1, 1)
+                                h_state = h_state.sum(dim=2) / token_counts  # (B, H, HD)
+                            else:
+                                h_state = h_state[:, :, -1, :]
+                                print(layer, h_state.shape)
                         else:
-                            h_state = h_state[:, :, -1, :]
-                            print(layer, h_state.shape)
-                    else:
-                        if aggregate == "sum":
+                            
                             token_counts = enc.attention_mask.cpu().sum(dim=1).clamp(min=1)  # (B, 1), to prevent divide-by-zero
                             token_counts = token_counts.unsqueeze(1)
-                            h_state = h_state.sum(dim=1) / token_counts  # (B, HD)
-                        else:
-                            h_state = h_state[:, -1, :]   # (B, HD)
+                            h_states = h_state.sum(dim=1) / token_counts  # (B, HD)
+                            all_hidden_sum[layer].append(h_states)
+                        
 
-                    # token_counts = mask.sum(dim=1, keepdim=True).clamp(min=1)    # (B, 1)
-                    # print(h_state.shape)
-                    # seq_avg = (tensors[0].cpu() * mask.cpu()).sum(dim=1) / token_counts.cpu()
-                    all_hidden[layer].append(h_state)
+                            h_states = h_state[:, -1, :]   # (B, HD)
+                            all_hidden_last[layer].append(h_states)
+                        
 
-                    del tensors[:], h_state #, token_counts
+                            get_f = enc_f.attention_mask.sum(dim=1).clamp(min=1)  # (B, 1), to prevent divide-by-zero
+                            l = enc.attention_mask.shape[1] #.clamp(min=1)  # (B, 1), to prevent divide-by-zero
+                            use = []
+                            for i in range(len(get_f)):
+                                use.append(h_state[i, l-get_f[i], :])
+                            h_states = torch.stack(use, dim=0) # (B, HD)
+                            all_hidden[layer].append(h_states)
+
+                        # all_hidden[layer].append(h_state)
+
+                        del tensors[:], h_state, h_states #, token_counts
+                        gc.collect()
+                        torch.cuda.empty_cache()
+
+                finally:
+                    # Hard cleanup so bs retries / next batches don't see stale captures
+                    for lst in acts.values():
+                        if lst:
+                            del lst[:]
                     gc.collect()
-                    torch.cuda.empty_cache()
-
-                id_ += 1
-                all_logits.append(out.logits[:, -1, :].cpu())
-                all_masks.append(enc.attention_mask.cpu())
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()  
 
                 print(f"Generated {len(chunk)} responses.")
+           
+                
 
 
-            return all_logits, all_masks, all_hidden
+            return all_hidden_sum, all_hidden_last, all_hidden
 
-        all_logits, all_masks, all_hidden = _inner()
+        all_hidden_sum, all_hidden_last, all_hidden = _inner()
 
-    # L_max = max(t.size(1) for t in all_masks)
-    # logits = torch.cat([F.pad(t, (0, 0, 0, L_max - t.size(1)))
-    #                     for t in all_logits], dim=0)
-    # masks  = torch.cat([F.pad(t, (0, L_max - t.size(1)))
-    #                     for t in all_masks], dim=0)
-    max_len = max(m.shape[1] for m in all_masks)
+    all_hidden_sum = {layer: torch.cat(h_list, dim=0) for layer, h_list in all_hidden_sum.items()}
+    print(all_hidden_sum[list(all_hidden_sum.keys())[0]].shape)
 
-    
+    all_hidden_last = {layer: torch.cat(h_list, dim=0) for layer, h_list in all_hidden_last.items()}
+    print(all_hidden_last[list(all_hidden_last.keys())[0]].shape)
 
-    # pad masks on the left of the seq dimension
-    padded_masks = [
-        F.pad(mask, (max_len - mask.size(1), 0))
-        for mask in all_masks
-    ]
-
-    # padded_states = {}
-    # for layer, states in acts.items():
-    #         padded_states[layer] = [
-    #             F.pad(h, (0, 0, max_len - h.size(1), 0))
-    #             for h in states
-            # ]
-    all_logits = torch.cat(all_logits, dim=0)       # [total_examples, max_len, vocab]
-    padded_masks  = torch.cat(padded_masks,  dim=0)       # [total_examples, max_len]
-    # states_tensor = {
-    #     layer: torch.cat(h_list, dim=0)                   # [total_examples, max_len, hid_dim]
-    #     for layer, h_list in padded_states.items()
-    # }  
     all_hidden = {layer: torch.cat(h_list, dim=0) for layer, h_list in all_hidden.items()}
     print(all_hidden[list(all_hidden.keys())[0]].shape)
-    return all_logits, padded_masks, all_hidden
+
+    return all_hidden_sum, all_hidden_last, all_hidden
 
 
 
 def parse_args():
     p = argparse.ArgumentParser("Evaluate LLM for harmful behavior on HarmBench.")
-    p.add_argument("--model", default="allenai/OLMo-2-0425-1B") #"allenai/OLMo-2-0425-1B", google/gemma-2-2b-it, meta-llama/Llama-3.2-3B-Instruct, meta-llama/Llama-3.2-3B, google/gemma-7b
-    p.add_argument("--cls_model", default="cais/HarmBench-Llama-2-13b-cls") #cais/HarmBench-Llama-2-13b-cls, cais/HarmBench-Mistral-7b-val-cls
-    p.add_argument("--atten", action="store_true",
-                        help="Capture attention weights instead of hidden states")
+    p.add_argument("--model", default="google/gemma-2-2b") # meta-llama/Llama-3.1-8B, google/gemma-2-2b-it, meta-llama/Llama-3.2-3B-Instruct, meta-llama/Llama-3.2-3B, google/gemma-7b
+    p.add_argument("--model_use", default="w4r10ck/SOLAR-10.7B-Instruct-v1.0-uncensored")
+    p.add_argument("--cls_model", default="cais/HarmBench-Mistral-7b-val-cls") #cais/HarmBench-Llama-2-13b-cls, cais/HarmBench-Mistral-7b-val-cls
+
     p.add_argument(
         "--behavior",
         type=str,
@@ -329,7 +334,7 @@ def parse_args():
     p.add_argument("--max_new_tokens", type=int, default=256)
     p.add_argument("--temperature", type=float, default=0.7)
     p.add_argument("--top_p", type=float, default=0.9)
-    p.add_argument("--batch_size", type=int, default=64)
+    p.add_argument("--batch_size", type=int, default=16)
     p.add_argument("--do_sample", action="store_true")
     p.add_argument(
         "--base_model", action="store_true", help="Skip chat template wrapping"
@@ -348,8 +353,6 @@ def parse_args():
 
 
 def main(args):
-    # args = parse_args()
-    atten = args.atten
     
 
     model, tokenizer = load_model_and_tokenizer(args.model, bnb_config=args.bnb_config, output_hidden_states=False)
@@ -364,27 +367,113 @@ def main(args):
         )
         print("Using template", template["description"])
 
-    print("Loading the HarmBench dataset")
-    dataset = load_dataset("walledai/HarmBench", "standard")["train"]
-    count = min(args.num_prompts, len(dataset))
-    prompts = [ex["prompt"] for ex in dataset.select(range(count))]
-    print(f"Loaded {len(prompts)} prompts from HarmBench dataset.")
+    
 
     safe_model_name = re.sub(r'[\\/*?:"<>|]', "_", args.model)
-    os.makedirs(f"{args.output_dir}/{safe_model_name}", exist_ok=True)
+    safe_model_name_use = re.sub(r'[\\/*?:"<>|]', "_", args.model_use)
 
-    save_path = os.path.join(args.output_dir, safe_model_name)
+    save_path = os.path.join(args.output_dir, safe_model_name, "linear_probes")
+    os.makedirs(save_path, exist_ok=True)
 
-    all_logits, all_masks, all_states = run_prompting(
+    
+
+    out_path = os.path.join(
+        args.output_dir, f"{safe_model_name_use}/eval_toxicity.csv"
+    )
+
+    df = pd.read_csv(out_path, sep=";")
+    labels = df[args.cls_model]
+    # for i, j in zip(df[labels==0]["prompt"], df[labels == 0]["model_output"]):
+    #     print(i)
+    #     print(j)
+    #     print("-----")
+    df = df[labels == 1]
+    print(f"Filtered to {len(df)} harmful responses.")
+    responses = df["model_output"].tolist()
+
+    print("Loading the HarmBench dataset")
+    dataset = load_dataset("walledai/HarmBench", "standard")["train"]
+    dataset = dataset.filter(lambda ex: ex["prompt"] in set(df["prompt"]))  
+    print(len(dataset))
+    # Pick up to N prompts
+    count = min(args.num_prompts, len(dataset))
+    prompts = [ex["prompt"] for ex in dataset.select(range(count))]
+
+    print(f"Loaded {len(prompts)} prompts from HarmBench dataset.") 
+
+    all_hidden_sum, all_hidden_last, all_hidden = run_prompting(
         model,
         tokenizer,
         prompts,
+        responses,
         base_model=args.base_model,
-        template=template,
         starting_batch_size=args.batch_size,
-        atten=atten,
-        aggregate=None, # "sum" or None (gets the last token)
-        tmp_dir=save_path,  # Temporary directory to store intermediate results
+        template=template,
+        atten=False,
+        aggregate=None, # or sum
+    )
+        
+    print(f"Saving results to {save_path}")
+    
+    save_safetensors(
+        all_hidden_sum,
+        os.path.join(save_path, f"hidden_states_gen_sum_answer.safetensors"),
+    )
+
+    save_safetensors(
+        all_hidden_last,
+        os.path.join(save_path, f"hidden_states_gen_last_answer.safetensors"),
+    )
+
+    save_safetensors(
+        all_hidden,
+        os.path.join(save_path, f"hidden_states_gen_answer.safetensors"),
+    )
+
+    refusal_responses = [
+        "I'm sorry, but I can't assist with that request.",
+        "I apologize, but I won't be able to help with that.",
+        "I'm sorry, but I cannot provide that information.",
+        "I apologize, but I am unable to assist with that request.",
+        "I'm sorry, but I can't help with that.",
+        "I apologize, but I won't be able to provide that information.",
+        "I'm sorry, but I cannot assist with that request.",
+        "I apologize, but I am unable to help with that.",
+        "I'm sorry, but I can't provide assistance with that.",
+        "I apologize, but I won't be able to help with that request.",
+        "That's not something I can support. If you have another question or need help with a different topic, I'm here to help.",
+        "I'm afraid I can't assist with that. It involves content that's restricted for safety, ethical, or legal reasons.",
+        "I must respectfully decline your request. Let me know if there's anything else I can assist you with.",
+        "For safety reasons, I can't provide that.",
+        "Due to ethical concerns, I can't assist with that request.",
+        "I'm unable to help with that due to safety guidelines.",
+        "I can't provide that information because it goes against ethical standards.",
+        "I'm sorry, but I must decline your request for safety reasons.",
+        "I cannot assist with that due to ethical considerations.",
+        "Because of legal restrictions, I cannot share that information.",
+        "That request isn't possible, though I can help you with another topic.",
+        "I can't provide that, but I can suggest safer alternatives.",
+        "Unfortunately, I can't help with that.",
+        "That's not something I'm able to provide.",
+        "That's not something I can do.",
+        "This request cannot be completed.",
+        "Providing that information isn't possible.",
+    ]
+    expanded_responses = random.choices(refusal_responses, k=len(prompts))
+
+    # If you want a random permutation (shuffled order each time)
+    random.shuffle(expanded_responses)
+
+    all_hidden_sum, all_hidden_last, all_hidden = run_prompting(
+        model,
+        tokenizer,
+        prompts,
+        expanded_responses,
+        base_model=args.base_model,
+        starting_batch_size=args.batch_size,
+        template=template,
+        atten=False,
+        aggregate=None, # or sum
     )
     # print(f"Generated {len(responses)} responses.")
     del model, tokenizer
@@ -394,88 +483,26 @@ def main(args):
 
     
     print(f"Saving results to {save_path}")
-    print(f"Logits shape: {all_logits.shape}")
-    print(f"Attention masks shape: {all_masks.shape}")
-    # print(f"Hidden states shape: {list(all_states.keys())}")
-
-    if atten:
-        save_safetensors(
-        all_states,
-        os.path.join(save_path, f"attention_state_pure.safetensors"),
-        )
-
-    else:
-        save_res = {
-            "logits_before": all_logits,
-        }
-        save_safetensors(
-            save_res,
-            os.path.join(save_path, f"logits_before.safetensors"),
-        )
-
-        save_res = {
-            "attn_masks": all_masks,
-        }
-        save_safetensors(
-            save_res,
-            os.path.join(save_path, f"attention_mask.safetensors"),
-        )
     
-        save_safetensors(
-            all_states,
-            os.path.join(save_path, f"hidden_states_pure.safetensors"),
-        )
+    save_safetensors(
+        all_hidden_sum,
+        os.path.join(save_path, f"hidden_states_gen_sum_refusal.safetensors"),
+    )
 
-    
-# model.layers.0.self_attn
-        
+    save_safetensors(
+        all_hidden_last,
+        os.path.join(save_path, f"hidden_states_gen_last_refusal.safetensors"),
+    )
+
+    save_safetensors(
+        all_hidden,
+        os.path.join(save_path, f"hidden_states_gen_refusal.safetensors"),
+    )
 
 
 if __name__ == "__main__":
     args = parse_args()
-    # models = ["google/gemma-2-2b-it", "google/gemma-2-2b", "meta-llama/Llama-3.2-3B", "meta-llama/Llama-3.2-3B-Instruct"]
-
-    # for model in models:
-    models = ["allenai/OLMo-2-0425-1B"] #["allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct"] #"allenai/OLMo-2-0425-1B"
-    for model in models:
-        args.model=model
+    for model in ["google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct", "allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct"]: #"google/gemma-2-2b", "meta-llama/Llama-3.2-3B"]:
+        args.model = model
+        print(f"Processing model {model}")
         main(args)
-    # main()
-
-# def parse_args():
-#     p = argparse.ArgumentParser("Dump activations for HarmBench prompts.")
-#     p.add_argument("--model", default="google/gemma-2-2b")
-#     p.add_argument("--num_prompts", type=int, default=300)
-#     p.add_argument("--output_dir", default="./activations")
-#     p.add_argument("--batch_size", type=int, default=64)
-#     p.add_argument("--bnb", action="store_true",
-#                    help="load model in 8-bit (bits-and-bytes)")
-#     return p.parse_args()
-
-# def main():
-#     args   = parse_args()
-#     model, tok = load_model_and_tokenizer(args.model, args.bnb)
-
-#     dataset  = load_dataset("walledai/HarmBench", "standard")["train"]
-#     prompts  = [ex["prompt"] for ex in dataset.select(range(args.num_prompts))]
-#     print(f"Running {len(prompts)} prompts…")
-
-#     logits, masks, states = run_prompting(model, tok, prompts, args.batch_size)
-
-#     safe_name = re.sub(r'[\\/*?:"<>|]', "_", args.model)
-#     out_dir   = os.path.join(args.output_dir, safe_name)
-#     os.makedirs(out_dir, exist_ok=True)
-
-#     save_safetensors({"logits_before": logits}, os.path.join(out_dir, "logits_before.safetensors"))
-#     save_safetensors({"attn_masks": masks},     os.path.join(out_dir, "attention_mask.safetensors"))
-#     save_safetensors(states,                   os.path.join(out_dir, "hidden_states_pure.safetensors"))
-#     print("✓ Saved tensors to", out_dir)
-
-#     # clean-up
-#     del model, tok, logits, masks, states
-#     gc.collect()
-#     if torch.cuda.is_available():
-#         torch.cuda.empty_cache()
-
-# if __name__ == "__main__":
-#     main()

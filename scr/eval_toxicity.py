@@ -236,7 +236,7 @@ def classify_generation(
 
 def parse_args():
     p = argparse.ArgumentParser("Evaluate LLM for harmful behavior on HarmBench.")
-    p.add_argument("--model", default="google/gemma-2-2b-it") # meta-llama/Llama-3.1-8B, google/gemma-2-2b-it, meta-llama/Llama-3.2-3B-Instruct, meta-llama/Llama-3.2-3B, google/gemma-7b
+    p.add_argument("--model", default="QuixiAI/Wizard-Vicuna-7B-Uncensored") # meta-llama/Llama-3.1-8B, google/gemma-2-2b-it, meta-llama/Llama-3.2-3B-Instruct, meta-llama/Llama-3.2-3B, google/gemma-7b
     p.add_argument("--cls_model", default="cais/HarmBench-Mistral-7b-val-cls") #cais/HarmBench-Llama-2-13b-cls, cais/HarmBench-Mistral-7b-val-cls
 
     p.add_argument(
@@ -375,14 +375,17 @@ def main(args):
     # labels_f = {'labels': cls_results}
     # np.save(labels_f, f"{args.output_dir}/{safe_model_name}/labels.npy")
     labels_f = np.array(cls_results)
-    np.save(f"{args.output_dir}/{safe_model_name}/labels_new.npy", labels_f)
+    np.save(f"{args.output_dir}/{safe_model_name}/labels.npy", labels_f)
 
 
 
 if __name__ == "__main__":
     args = parse_args()
-    models = ["google/gemma-2-2b-it", "google/gemma-2-2b", "meta-llama/Llama-3.2-3B", "meta-llama/Llama-3.2-3B-Instruct"]
+    # models = ["google/gemma-2-2b-it", "google/gemma-2-2b", "meta-llama/Llama-3.2-3B", "meta-llama/Llama-3.2-3B-Instruct"]
 
+    # for model in models:
+    models = ["allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct"] #"allenai/OLMo-2-0425-1B"
+    # models = ["QuixiAI/Wizard-Vicuna-7B-Uncensored"] # too big
     for model in models:
         args.model=model
         main(args)
