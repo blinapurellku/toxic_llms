@@ -1,34 +1,27 @@
 import argparse
-import datetime
-import gc
-import json
 import os
 import re
-from typing import Dict, List, Optional, Tuple, Union
-
-import torch.nn.functional as F
+from typing import Dict, Optional, Tuple
+import matplotlib.pyplot as plt
+import torch
+from safetensors.torch import load_file as load_safetensors
+from sklearn.metrics import (accuracy_score, balanced_accuracy_score)
+from sklearn.model_selection import train_test_split
+import numpy as np
+from numpy.typing import NDArray
+from typing import Optional, Iterable, Dict, Any, Tuple
+from sklearn.linear_model import SGDClassifier
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import log_loss, accuracy_score, balanced_accuracy_score
+from sklearn.utils import shuffle as sk_shuffle
 
 os.environ["TORCHINDUCTOR_DISABLE"] = "1"
 os.environ["TORCH_COMPILE"] = "0"
 os.environ["TORCHDYNAMO_DISABLE"] = "1"
 os.environ["DISABLE_TORCH_COMPILE"] = "1"
 os.environ["TRANSFORMERS_NO_COMPILE"] = "1"
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
-import torch
-from accelerate.utils import find_executable_batch_size
-from datasets import load_dataset
-from safetensors.torch import load_file as load_safetensors
-from safetensors.torch import save_file as save_safetensors
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import (accuracy_score, balanced_accuracy_score,
-                             classification_report, f1_score)
-from sklearn.model_selection import train_test_split
-from templates import LLAMA_CLS_PROMPT, get_template
-from tqdm import tqdm
-from transformers import (AutoModelForCausalLM, AutoTokenizer,
-                          BitsAndBytesConfig)
+
 
 # Optional: avoid error spam from Torch Dynamo
 torch._dynamo.config.suppress_errors = False
@@ -47,67 +40,120 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
 def train_linear_probe(
-    activations: np.ndarray,
-    labels: np.ndarray,
-    test_size: float = 0.4,
-    random_seed: int = 42,
-    max_iter: int = 1000,
+    activations: NDArray[np.floating],
+    labels: NDArray[np.integer],
+    *,
+    test_size: float = 0.2,
+    random_seed: int = SEED,
+    max_steps: int = 1000,
     verbose: bool = True,
-):
+    early_stopping: bool = True,
+    patience: int = 5,
+    threshold: float = 1e-5,
+    warmup_steps: int = 10,
+    model_kwargs: Optional[Dict[str, Any]] = None,
+) -> Tuple[SGDClassifier, Dict[str, Any]]:
     """
-    Trains a linear probe (logistic regression) to classify activations as pos/neg.
-
-    Args:
-        activations (np.ndarray): Shape (N, D), hidden states.
-        labels (np.ndarray): Shape (N,), binary labels (0 = neg, 1 = pos).
-        test_size (float): Proportion of held-out test data.
-        random_seed (int): Random seed for reproducibility.
-        max_iter (int): Max iterations for logistic regression.
-        verbose (bool): Whether to print metrics.
-
-    Returns:
-        model (LogisticRegression): Trained linear probe.
-        metrics (dict): Accuracy and classification report.
+    Train a linear probe (logistic regression via SGD) on (N,D) activations with binary labels (0/1).
     """
-    assert activations.shape[0] == labels.shape[0], "Mismatched samples and labels"
 
-    # Split into train/test
+    assert activations.ndim == 2, "Expected shape (N, D)"
+    assert labels.ndim == 1 and set(np.unique(labels)) <= {0, 1}, "Labels must be 0/1"
+
+    # default kwargs
+    model_kwargs = {} if model_kwargs is None else dict(model_kwargs)
+
+    # shuffle + fixed train/test split
+    X, y = sk_shuffle(activations, labels, random_state=random_seed)
     X_train, X_test, y_train, y_test = train_test_split(
-        activations, labels, test_size=test_size, random_state=random_seed, stratify=labels
-    )
-
-    # Train linear probe
-    clf = LogisticRegression(
-        penalty="l2",
-        solver="liblinear",
-        class_weight="balanced",  # ⬅️ Automatically balances based on class freq
-        max_iter=max_iter,
+        X, y,
+        test_size=test_size,
+        stratify=y,
         random_state=random_seed,
-        
     )
-    clf.fit(X_train, y_train)
-    
-    # Get predictions for both train and test sets
-    y_train_pred = clf.predict(X_train)
-    train_acc = balanced_accuracy_score(y_train, y_train_pred)
-    # train_f1 = f1_score(y_train, y_train_pred, average='weighted')
 
-    # Evaluate
-    y_pred = clf.predict(X_test)
-    acc = balanced_accuracy_score(y_test, y_pred)
-    # f1_sc = f1_score(y_test, y_pred, average='weighted')
-    report = classification_report(y_test, y_pred, output_dict=True)
+    # model + scaler
+    clf = SGDClassifier(loss="log_loss", random_state=random_seed, **model_kwargs)
+    scaler = StandardScaler()
+
+    # history for monitoring
+    history = {"step": [], "train_loss": [], "val_loss": []}
+    best_val = np.inf
+    no_improve = 0
+    stopped_early = False
+
+    steps_taken = 0
+    while steps_taken < max_steps:
+        steps_taken += 1
+
+        # warmup: fit on all training data
+        if not early_stopping or steps_taken <= warmup_steps:
+            scaler.partial_fit(X_train)
+            Xtr = scaler.transform(X_train)
+            clf.partial_fit(Xtr, y_train, classes=np.array([0, 1]))
+
+            probs = clf.predict_proba(Xtr)
+            tr_loss = log_loss(y_train, probs, labels=[0, 1])
+
+            history["step"].append(steps_taken)
+            history["train_loss"].append(tr_loss)
+            history["val_loss"].append(np.nan)
+
+        else:
+            # split off a validation set from train each step
+            Xtr, Xva, ytr, yva = train_test_split(
+                X_train, y_train, test_size=test_size, stratify=y_train, random_state=random_seed
+            )
+            scaler.partial_fit(Xtr)
+            Xtr_s = scaler.transform(Xtr)
+            Xva_s = scaler.transform(Xva)
+
+            clf.partial_fit(Xtr_s, ytr, classes=np.array([0, 1]))
+
+            tr_loss = log_loss(ytr, clf.predict_proba(Xtr_s), labels=[0, 1])
+            va_loss = log_loss(yva, clf.predict_proba(Xva_s), labels=[0, 1])
+
+            history["step"].append(steps_taken)
+            history["train_loss"].append(tr_loss)
+            history["val_loss"].append(va_loss)
+
+            # check early stopping
+            if va_loss + threshold < best_val:
+                best_val = va_loss
+                no_improve = 0
+            else:
+                no_improve += 1
+                if no_improve >= patience:
+                    stopped_early = True
+                    break
+
+    # evaluate on held-out test set
+    Xte = scaler.transform(X_test)
+    probs_test = clf.predict_proba(Xte)
+    preds_test = clf.predict(Xte)
+
+    test_loss = log_loss(y_test, probs_test, labels=[0, 1])
+    acc = accuracy_score(y_test, preds_test)
+    bal_acc = balanced_accuracy_score(y_test, preds_test)
 
     if verbose:
-        print(f"Linear probe accuracy: {acc:.4f}")
-        # print("Classification report:")
-        # print(classification_report(y_test, y_pred, zero_division=0))
+        tag = " (early stopped)" if stopped_early else ""
+        print(f"Steps taken: {steps_taken}{tag}")
+        print(f"Test CE: {test_loss:.4f} | Test Acc: {acc:.4f} | Test BalAcc: {bal_acc:.4f}")
 
-    return clf, {
-        "test": acc,
-        "train": train_acc,
-        # "report": report,
-            }
+    info = {
+        "scaler": scaler,
+        "steps_taken": steps_taken,
+        "stopped_early": stopped_early,
+        "history": history,
+        "final_metrics": {
+            "test_loss": test_loss,
+            "test_acc": acc,
+            "test_bal_acc": bal_acc,
+        },
+    }
+    return clf, info
+
 
 
 def parse_args():

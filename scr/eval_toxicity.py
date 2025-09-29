@@ -49,24 +49,28 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
 
-
 def load_model_and_tokenizer(model_name: str, base_model: bool = False, bnb_config: Optional[BitsAndBytesConfig] = None):
     print(f"Loading model: {model_name}")
+    hf_token = os.getenv("HUGGINGFACEHUB_API_TOKEN")
     tokenizer = AutoTokenizer.from_pretrained(
-        model_name, padding_side="left", truncation_side="left"
+        model_name, padding_side="left", truncation_side="left", token=hf_token, cache_dir="/hf",
     )
     if bnb_config is not None:
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
-            # torch_dtype=torch.bfloat16,
+            torch_dtype=torch.bfloat16,
             quantization_config=bnb_config,
             device_map=device, #"auto",
+            token=hf_token,
+            cache_dir="/hf",
         ).eval()
     else:
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
             torch_dtype=torch.bfloat16,
             device_map=device,  # "auto",
+            token=hf_token,
+            cache_dir="/hf",
         ).eval()
 
     if tokenizer.pad_token is None:
@@ -178,12 +182,14 @@ def classify_generation(
         quantization_config=bnb_config_1,
         # torch_dtype=torch.bfloat16, if torch.cuda.is_available() else torch.float32,
         device_map=device,  # "auto",
+        token=os.getenv("HUGGINGFACEHUB_API_TOKEN"),
+        cache_dir="/hf",
     ).eval()
     cls_tokenizer = AutoTokenizer.from_pretrained(
-        cls_model_id, padding_side="left", truncation_side="left"
+        cls_model_id, padding_side="left", truncation_side="left", token=os.getenv("HUGGINGFACEHUB_API_TOKEN"), cache_dir="/hf",
     )
 
-    templ = MISTRAL_CLS_PROMPT["prompt"]
+    templ = LLAMA_CLS_PROMPT["prompt"]
     combined_inputs = [
         templ.format(behavior=u, generation=v) for u, v in zip(prompts, responses)
     ]
@@ -236,7 +242,7 @@ def classify_generation(
 
 def parse_args():
     p = argparse.ArgumentParser("Evaluate LLM for harmful behavior on HarmBench.")
-    p.add_argument("--model", default="google/gemma-2-2b-it") # meta-llama/Llama-3.1-8B, google/gemma-2-2b-it, meta-llama/Llama-3.2-3B-Instruct, meta-llama/Llama-3.2-3B, google/gemma-7b
+    p.add_argument("--model", default="w4r10ck/SOLAR-10.7B-Instruct-v1.0-uncensored") #google/gemma-2-2b-it") # meta-llama/Llama-3.1-8B, google/gemma-2-2b-it, meta-llama/Llama-3.2-3B-Instruct, meta-llama/Llama-3.2-3B, google/gemma-7b
     p.add_argument("--cls_model", default="cais/HarmBench-Mistral-7b-val-cls") #cais/HarmBench-Llama-2-13b-cls, cais/HarmBench-Mistral-7b-val-cls
 
     p.add_argument(
@@ -246,7 +252,7 @@ def parse_args():
     )
     p.add_argument("--bnb_config", type=str, default=None)
     p.add_argument("--num_prompts", type=int, default=300)
-    p.add_argument("--output_dir", type=str, default="/data/erblina/Master_thesis")
+    p.add_argument("--output_dir", type=str, default="/mnt")
     p.add_argument("--max_new_tokens", type=int, default=256)
     p.add_argument("--temperature", type=float, default=0.7)
     p.add_argument("--top_p", type=float, default=0.9)
@@ -257,7 +263,7 @@ def parse_args():
     )
     p.add_argument(
         "--chat_template",
-        default=None,
+        default='llama-2',
         help="Shortcut for get_template (e.g. 'llama-2', 'mistral')",
     )
     p.add_argument(
@@ -289,7 +295,7 @@ def main():
         print("Using template", template["description"])
 
     print("Loading the HarmBench dataset")
-    dataset = load_dataset("walledai/HarmBench", "standard")["train"]
+    dataset = load_dataset("walledai/HarmBench", "standard", token=os.getenv("HUGGINGFACEHUB_API_TOKEN"), cache_dir="/hf")["train"]
     count = min(args.num_prompts, len(dataset))
     prompts = [ex["prompt"] for ex in dataset.select(range(count))]
     print(f"Loaded {len(prompts)} prompts from HarmBench dataset.") 
