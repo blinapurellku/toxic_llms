@@ -8,10 +8,12 @@ import zstandard as zstd
 def safe_name(s: str) -> str:
     return re.sub(r'[\\/*?:"<>|]', "_", s)
 
-def save_prompts_responses(output_dir, model, layer_name, alpha, prompts, responses):
+def save_prompts_responses(output_dir, model, dataset, layer_name, alpha, prompts, responses):
     safe_model = safe_name(model)
     folder = os.path.join(output_dir, safe_model)
     os.makedirs(folder, exist_ok=True)
+    if dataset is not None:
+        layer_name = f"{dataset}__{layer_name}"
     filename = f"{layer_name}__alpha_{alpha}.json.zst"
     path = os.path.join(folder, filename)
 
@@ -27,9 +29,12 @@ def save_prompts_responses(output_dir, model, layer_name, alpha, prompts, respon
 
     print(f"Saved {len(prompts)} prompts/responses to {path}")
 
-def load_prompts_responses(output_dir, model, layer_name, alpha):
+def load_prompts_responses(output_dir, model, dataset, layer_name, alpha):
     safe_model = safe_name(model)
     folder = os.path.join(output_dir, safe_model)
+    if dataset is not None:
+        layer_name = f"{dataset}__{layer_name}"
+        
     filename = f"{layer_name}__alpha_{alpha}.json.zst"
     path = os.path.join(folder, filename)
 
