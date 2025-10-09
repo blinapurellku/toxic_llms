@@ -184,7 +184,6 @@ def main(args):
         )
 
         # Create a safe filename by replacing problematic characters
-        safe_model_name = re.sub(r'[\\/*?:"<>|]', "_", args.model)
         os.makedirs(f"{args.output_dir}/{safe_model_name}", exist_ok=True)
 
         out_file = os.path.join(

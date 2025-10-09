@@ -25,7 +25,7 @@ import pandas as pd
 from accelerate.utils import find_executable_batch_size
 from datasets import load_dataset
 from safetensors.torch import save_file as save_safetensors
-from templates import LLAMA_CLS_PROMPT, get_template, MISTRAL_CLS_PROMPT
+from utils_templates import LLAMA_CLS_PROMPT, get_template, MISTRAL_CLS_PROMPT
 from tqdm import tqdm
 from transformers import (AutoModelForCausalLM, AutoTokenizer,
                           BitsAndBytesConfig)
@@ -147,6 +147,8 @@ def main(args):
             system_message=args.system_message, # LLAMA2_DEFAULT_SYSTEM_PROMPT,
         )
         print("Using template", template["description"])
+
+    print('Loading dataset ', safe_dataset)       
     prompts = load_dataset(args.dataset)  # 
     
     steering_vector = torch.load(
@@ -176,10 +178,16 @@ def main(args):
         
         steering_vector_side = steering_vector[layer_name][side] #* steering_vector[layer_name]["scale"]
         print(f"Injecting steering vector for layer {layer_name} on {side} side: {steering_vector_side.shape}")
-       
 
-        if os.path.exists(f"{args.output_dir}/{safe_model_name}/{layer_name}__alpha_{alpha}.json.zst"):
-            filtered_prompts, filtered_responses = load_prompts_responses(args.output_dir, args.model, safe_dataset, layer_name, alpha)
+        if args.dataset == "walledai/HarmBench":
+            saved_path = f"{args.output_dir}/{safe_model_name}/{layer_name}__alpha_{alpha}.json.zst" 
+            data = None
+        else:
+            saved_path = f"{args.output_dir}/{safe_model_name}/{safe_dataset}__{layer_name}__alpha_{alpha}.json.zst"
+            data = safe_dataset
+
+        if os.path.exists(saved_path):
+            filtered_prompts, filtered_responses = load_prompts_responses(args.output_dir, args.model, data, layer_name, alpha)
             print(f"Generated {len(filtered_prompts)} valid responses out of {len(filtered_prompts)} prompts.")
             print(f"Generated {len(filtered_responses)} valid responses out of {len(filtered_responses)} total responses.")
             responses_after[layer_name] = filtered_responses
@@ -218,7 +226,7 @@ def main(args):
                 prompts_after[layer_name] = filtered_prompts
 
                 # Save the prompts and responses
-                save_prompts_responses(args.output_dir, args.model, safe_dataset, layer_name, alpha, filtered_prompts, filtered_responses)
+                save_prompts_responses(args.output_dir, args.model, data, safe_dataset, layer_name, alpha, filtered_prompts, filtered_responses)
 
             finally:
                 handle.remove()

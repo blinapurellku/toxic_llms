@@ -25,10 +25,14 @@ import pandas as pd
 from accelerate.utils import find_executable_batch_size
 from datasets import load_dataset
 from safetensors.torch import save_file as save_safetensors
-from templates import LLAMA_CLS_PROMPT, get_template, MISTRAL_CLS_PROMPT
+from utils_templates import LLAMA_CLS_PROMPT, get_template, MISTRAL_CLS_PROMPT
 from tqdm import tqdm
 from transformers import (AutoModelForCausalLM, AutoTokenizer,
                           BitsAndBytesConfig)
+from utils_evaluating_toxicity import classify_generation
+from utils_load_dataset_and_models import load_model_and_tokenizer, load_classifier, load_dataset, classify_models_dict
+from generate_responses import classify_generation, generate_responses
+
 
 # Optional: avoid error spam from Torch Dynamo
 torch._dynamo.config.suppress_errors = False
@@ -44,37 +48,6 @@ if torch.cuda.is_available():
 # torch.use_deterministic_algorithms(True)
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
-# BitsAndBytesConfig for 8-bit quantization
-# bnb_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16)
-
-
-
-def load_model_and_tokenizer(model_name: str, base_model: bool = False, bnb_config: Optional[BitsAndBytesConfig] = None):
-    print(f"Loading model: {model_name}")
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_name, padding_side="left", truncation_side="left"
-    )
-    if bnb_config is not None:
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            torch_dtype=torch.bfloat16,
-            quantization_config=bnb_config,
-            device_map=device, #"auto",
-        ).eval()
-    else:
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            torch_dtype=torch.bfloat16,
-            device_map=device,  # "auto",
-        ).eval()
-
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    model.config.pad_token_id = tokenizer.pad_token_id
-
-    return model, tokenizer
 
 
 def steering_vector_hook(
@@ -107,164 +80,6 @@ def steering_vector_hook(
         
     return module.register_forward_hook(_hook)
 
-
-@torch.no_grad()
-def generate_responses(
-    model,
-    tokenizer,
-    prompts,
-    base_model: bool = False,
-    max_new_tokens: int = 100,
-    do_sample: bool = False,
-    temperature: float = 1.0,
-    top_p: float = 0.9,
-    starting_batch_size: int = 4,
-    template: dict | None = None,
-    output_dir: str = "./",
-):
-    """Generate *responses* for `prompts`, guaranteeing a chat‑template wrap
-    (unless `base_model=True`) and auto‑adapt batch size to GPU capacity."""
-
-    gen_kwargs = {
-        "max_new_tokens": max_new_tokens,
-        "pad_token_id": tokenizer.pad_token_id,
-        # "return_dict_in_generate": True,  # Return a more detailed output object
-    }
-    if do_sample:
-        gen_kwargs.update(
-            {"do_sample": True, "temperature": temperature, "top_p": top_p}
-        )
-    
-    
-
-    @find_executable_batch_size(starting_batch_size=starting_batch_size)
-    def _inner(bs):
-        responses = [] 
-        for i in tqdm(range(0, len(prompts), bs), desc=f"Generating (bs={bs})"):
-            chunk = prompts[i : i + bs]
-            # ----- wrap with chat template -----
-            if base_model:
-                wrapped = chunk
-            else:
-                if template is None:
-                    raise ValueError(
-                        "A chat template must be supplied when base_model=False"
-                    )
-                wrapped = [template["prompt"].format(instruction=p) for p in chunk]
-
-            enc = tokenizer(
-                wrapped, return_tensors="pt", padding=True, truncation=True
-            ).to(model.device)
-
-            with torch.inference_mode():
-                generation_output = model.generate(**enc, **gen_kwargs).cpu()
-                
-            # With return_dict_in_generate=True, we get a more detailed output object
-            # sequences = generation_output.sequences
-            
-            for j in range(len(chunk)):
-                # ids = sequences[j]  # [seq_len]
-
-                decoded = tokenizer.decode(generation_output[j][enc.input_ids.shape[1] :], skip_special_tokens=True).strip()
-
-                if not decoded:
-                    print(f" Empty generation retrying for: {chunk[j]}")
-
-                    with torch.inference_mode():
-                        retry_out = model.generate(
-                            input_ids=enc.input_ids[j].unsqueeze(0),
-                            attention_mask=enc.attention_mask[j].unsqueeze(0),
-                            **gen_kwargs,
-                        ).cpu()
-
-                    decoded = tokenizer.decode(
-                        retry_out[0][enc.input_ids.shape[1] :], skip_special_tokens=True
-                    ).strip()
-
-                    
-                responses.append(decoded)
-
-            del enc, generation_output # Free memory
-            if torch.cuda.is_available():
-                gc.collect()
-                torch.cuda.empty_cache()
-
-
-        print(len(responses), "responses generated")
-        return responses
-    
-    responses = _inner()
-    print(len(responses), "responses generated")
-    return responses
-
-
-@torch.no_grad()
-def classify_generation(
-    prompts, responses, cls_model, cls_tokenizer, cls_model_id, behavior, bnb_config, batch_size: int = 8
-):
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-
-    # bnb_config_1 = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16)
-
-    # print(f"Loading classifier: {cls_model_id}")
-    # cls_model = AutoModelForCausalLM.from_pretrained(
-    #     cls_model_id,
-    #     quantization_config=bnb_config_1,
-    #     # torch_dtype=torch.bfloat16, if torch.cuda.is_available() else torch.float32,
-    #     device_map=device,  # "auto",
-    # ).eval()
-    # cls_tokenizer = AutoTokenizer.from_pretrained(
-    #     cls_model_id, padding_side="left", truncation_side="left"
-    # )
-
-    templ = MISTRAL_CLS_PROMPT["prompt"]
-    combined_inputs = [
-        templ.format(behavior=u, generation=v) for u, v in zip(prompts, responses)
-    ]
-
-
-    @find_executable_batch_size(starting_batch_size=batch_size)
-    def _classify_batch_safely(bs):
-        l_results = []
-        for i in tqdm(
-            range(0, len(combined_inputs), bs),
-            desc=f"Classifying with {cls_model_id} (bs={bs})",
-        ):
-            batch_texts = combined_inputs[i : i + bs]
-            enc = cls_tokenizer(batch_texts, return_tensors="pt", padding="longest").to(
-                cls_model.device
-            )
-            with torch.inference_mode():
-                out = cls_model.generate(
-                    **enc, do_sample=False, max_new_tokens=1
-                ).cpu()
-
-            toks = out[:, enc.input_ids.shape[1] :]
-            decoded = cls_tokenizer.batch_decode(toks, skip_special_tokens=True)
-
-            for d in decoded:
-                label = d.strip().lower()
-                if label == "yes":
-                    is_toxic = 1
-                elif label == "no":
-                    is_toxic = 0
-                else:
-                    is_toxic = -1
-                    print(f"Unexpected label '{label}' in: {d}")
-
-                l_results.append(is_toxic)
-        print(len(l_results), "responses classified")
-        
-        del enc, out
-        if torch.cuda.is_available():
-            gc.collect()               
-            torch.cuda.empty_cache()
-        return l_results
-
-    results = _classify_batch_safely()
-
-    return results
 
    
 def parse_args():
@@ -315,6 +130,11 @@ def main(args):
     else:
         bnb_config_1 = None
 
+    
+    safe_dataset = re.sub(r'[\\/*?:"<>|]', "_", args.dataset)
+    safe_model_name = re.sub(r'[\\/*?:"<>|]', "_", args.model)
+    cls_name = classify_models_dict[args.dataset] if args.dataset in classify_models_dict else None
+
     model, tokenizer = load_model_and_tokenizer(args.model, args.base_model, bnb_config=bnb_config_1)
     pad_token_id = tokenizer.pad_token_id  # Save this for later use
 
@@ -327,33 +147,25 @@ def main(args):
         )
         print("Using template", template["description"])
 
-    print("Loading the HarmBench dataset")
-    dataset = load_dataset("walledai/HarmBench", "standard")["train"]
-    count = min(args.num_prompts, len(dataset))
-    prompts = [ex["prompt"] for ex in dataset.select(range(count))]
-    print(f"Loaded {len(prompts)} prompts from HarmBench dataset.") 
-    
-    safe_model_name = re.sub(r'[\\/*?:"<>|]', "_", args.model)
-    # safe_base_name = re.sub(r'[\\/*?:"<>|]', "_", "google/gemma-2-2b")
+    print('Loading dataset ', safe_dataset)
+    prompts = load_dataset(args.dataset)  # 
+
     steering_vector = torch.load(
         os.path.join(args.output_dir, safe_model_name, "steering_vectors.pt")
     )
     
-    print(f"Loaded {len(steering_vector.keys())} steering vectors.")
-
-    
+    print(f"Loaded {len(steering_vector.keys())} steering vectors.")   
 
     name2mod = {n: m for n, m in model.named_modules()}
     
     
     side = 'toxic' # or 'nontoxic' 'toxic'
-    save_path = os.path.join(args.output_dir, safe_model_name)
 
     labels_before = np.load(f"{args.output_dir}/{safe_model_name}/labels.npy")
     valid_lab = [r for r in labels_before if r != -1]
     avg_label = sum(valid_lab) / len(labels_before)
     print(f"Mean toxicity label: {avg_label:.3f}, {sum(valid_lab)}/{len(labels_before)} , valid responses: {len(valid_lab)}")
-    # 2) Build a lookup of ALL named modules in the model
+
     responses_after = {}
     prompts_after = {}
     # layer_names = [n for n in layer_names if n in name2mod]
@@ -363,7 +175,7 @@ def main(args):
     
     layer_names = list(steering_vector.keys()) 
     print(len(layer_names), "layers to steer")
-    # hooks = []
+
     for layer_name in layer_names: 
 
         if layer_name not in name2mod:
@@ -371,11 +183,19 @@ def main(args):
         
         steering_vector_side = steering_vector[layer_name][side] #* steering_vector[layer_name]["scale"]
         print(f"Injecting steering vector for layer {layer_name} on {side} side: {steering_vector_side.shape}")
-        # folder = os.path.join(output_dir, safe_model)
-        # filename = f"{layer_name}__alpha_{alpha}.json.zst"
-        # path = os.path.join(folder, filename)
-        if os.path.exists(f"{args.output_dir}/{safe_model_name}/{layer_name}__alpha_{alpha}.json.zst"):
-            filtered_prompts, filtered_responses = load_prompts_responses(args.output_dir, args.model, layer_name, alpha)
+        
+        
+        if args.dataset == "walledai/HarmBench":
+            saved_path = f"{args.output_dir}/{safe_model_name}/{layer_name}__alpha_{alpha}.json.zst" 
+            data = None
+
+        else:
+            saved_path = f"{args.output_dir}/{safe_model_name}/{safe_dataset}__{layer_name}__alpha_{alpha}.json.zst"
+            data = safe_dataset
+            
+
+        if os.path.exists(saved_path):
+            filtered_prompts, filtered_responses = load_prompts_responses(args.output_dir, args.model, data, layer_name, alpha)
             print(f"Generated {len(filtered_prompts)} valid responses out of {len(filtered_prompts)} prompts.")
             print(f"Generated {len(filtered_responses)} valid responses out of {len(filtered_responses)} total responses.")
             responses_after[layer_name] = filtered_responses
@@ -414,7 +234,7 @@ def main(args):
                 prompts_after[layer_name] = filtered_prompts
 
                 # Save the prompts and responses
-                save_prompts_responses(args.output_dir, args.model, layer_name, alpha, filtered_prompts, filtered_responses)
+                save_prompts_responses(args.output_dir, args.model, data, layer_name, alpha, filtered_prompts, filtered_responses)
 
             finally:
                 # for h in hooks:
@@ -445,8 +265,9 @@ def main(args):
     torch.cuda.synchronize()
 
 
-    labels_after = {}
     print("Classifying responses after steering injection...")
+
+    
 
     bnb_config_2 = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16)
 
@@ -454,56 +275,60 @@ def main(args):
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-    bnb_config_1 = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16)
+    bnb_config_2 = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16)
+    cls_model, cls_tokenizer, cls_template, cls_name = load_classifier(args.dataset, device, bnb_config=bnb_config_2)
+            
+    if args.dataset in "walledai/HarmBench":
+        save_np = f"{args.output_dir}/{safe_model_name}/labels_steering_{side}_alpha_{alpha}.npy"
+    else:
+        save_np = f"{args.output_dir}/{safe_model_name}/labels_steering_{side}_alpha_{alpha}_{safe_dataset}_{args.steer_layer}.npy"
 
-    print(f"Loading classifier: {args.cls_model}")
-    cls_model = AutoModelForCausalLM.from_pretrained(
-        args.cls_model,
-        quantization_config=bnb_config_1,
-        torch_dtype=torch.bfloat16, #if torch.cuda.is_available() else torch.float32,
-        device_map=device,  # "auto",
-    ).eval()
-    cls_tokenizer = AutoTokenizer.from_pretrained(
-        args.cls_model, padding_side="left", truncation_side="left"
-    )
-    
-    res = []
+   
+    if os.path.exists(save_np):
+        labels_after = np.load(save_np, allow_pickle=True).item()
+        print(f"Loaded existing labels from {save_np}")
 
-    for layer_name, responses in responses_after.items():
-        cls_results = classify_generation(
-                prompts_after[layer_name],
-                responses,
-                cls_model,
-                cls_tokenizer,
-                args.cls_model,
-                args.behavior,
-                bnb_config=bnb_config_2,
-                batch_size=32, #args.batch_size,  ### this simply because I know in my case
+    else:    
+        res = []
+        labels_after = {}
+
+
+        for layer_name, responses in responses_after.items():
+            cls_results = classify_generation(
+                    prompts_after[layer_name],
+                    responses,
+                    cls_model,
+                    cls_tokenizer,
+                    cls_name,
+                    args.behavior,
+                    templ=cls_template,
+                    batch_size=args.batch_size,  #
+                )
+            print(f"Classified {len(cls_results)} responses.")
+            # Average label for quick numeric overview
+            valid_lab = [r for r in cls_results if r != -1]
+            avg_label = sum(valid_lab) / len(cls_results)
+            print(f"Layer {layer_name} classification results:")
+            print(f"Mean toxicity label: {avg_label:.3f}, {sum(valid_lab)}/{len(cls_results)} toxic responses")
+            labels_after[layer_name] = np.array(cls_results)
+            res.append(
+                {
+                    "layer_name": layer_name,
+                    "avg_toxicity": avg_label,
+                    "num_toxic": sum(valid_lab),
+                    "total_responses": len(cls_results),
+                }
             )
-        print(f"Classified {len(cls_results)} responses.")
-        # Average label for quick numeric overview
-        valid_lab = [r for r in cls_results if r != -1]
-        avg_label = sum(valid_lab) / len(cls_results)
-        print(f"Layer {layer_name} classification results:")
-        print(f"Mean toxicity label: {avg_label:.3f}, {sum(valid_lab)}/{len(cls_results)} toxic responses")
-        labels_after[layer_name] = np.array(cls_results)
-        res.append(
-            {
-                "layer_name": layer_name,
-                "avg_toxicity": avg_label,
-                "num_toxic": sum(valid_lab),
-                "total_responses": len(cls_results),
-            }
-        )
-    
-    del cls_model, cls_tokenizer
-    if torch.cuda.is_available():
-        gc.collect()               
-        torch.cuda.empty_cache()
+        
+        del cls_model, cls_tokenizer
+        if torch.cuda.is_available():
+            gc.collect()               
+            torch.cuda.empty_cache()
 
-    np.save(f"{args.output_dir}/{safe_model_name}/labels_steering_{side}_alpha_{alpha}.npy", labels_after)
+        np.save(save_np, labels_after)
+        # np.save(f"{args.output_dir}/{safe_model_name}/labels_steering_{side}_alpha_{alpha}.npy", labels_after)
 
-    print("Results: ", res)
+        print("Results: ", res)
     
 
    
