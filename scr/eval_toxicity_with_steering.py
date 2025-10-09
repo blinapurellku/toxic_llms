@@ -32,7 +32,7 @@ from transformers import (AutoModelForCausalLM, AutoTokenizer,
 from utils_evaluating_toxicity import classify_generation
 from utils_load_dataset_and_models import load_model_and_tokenizer, load_classifier, load_dataset, classify_models_dict
 from generate_responses import classify_generation, generate_responses
-
+from utils_hooks import steering_vector_hook
 
 # Optional: avoid error spam from Torch Dynamo
 torch._dynamo.config.suppress_errors = False
@@ -48,37 +48,6 @@ if torch.cuda.is_available():
 # torch.use_deterministic_algorithms(True)
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
-
-def steering_vector_hook(
-    module: torch.nn.Module,
-    steer: torch.Tensor, 
-    alpha: float = 1.0, 
-) -> torch.utils.hooks.RemovableHandle:
-    """
-    Register a forward‐hook on `module` that adds `steer` to its output.
-    Returns the hook handle so you can remove it later.
-    """
-    steer = steer.detach()
-    def _hook(_mod, _inp, out):
-        # Handle HF blocks that return tuples (hidden, present, …)
-        tgt = out[0] if isinstance(out, tuple) else out  # (B, L, H)
-
-        # Broadcast if steer is 1‑D
-        add = steer
-        if steer.ndim == 1:
-            add = steer.unsqueeze(0).unsqueeze(0)  # (1, 1, H)
-        add = add.to(tgt.device)
-
-        # if ATTN_MASK is not None:
-        #     # ATTN_MASK: shape (B, L) → (B, L, 1)
-        #     expanded_mask = ATTN_MASK.unsqueeze(-1).to(tgt.device)  # (B, L, 1)
-        #     add = add * expanded_mask  # (B, L, H) mask-aware addition
-
-        mod = tgt + alpha * add
-        return (mod,) + out[1:] if isinstance(out, tuple) else mod
-        
-    return module.register_forward_hook(_hook)
 
 
    
@@ -173,7 +142,11 @@ def main(args):
     # layer_names = [args.steer_layer] #list(steering_vector.keys())
     alpha = args.alpha if hasattr(args, 'alpha') else 1.0
     
-    layer_names = list(steering_vector.keys()) 
+    if args.dataset == "walledai/HarmBench":
+        layer_names = list(steering_vector.keys()) 
+    else:
+        layer_names = [args.steer_layer]
+
     print(len(layer_names), "layers to steer")
 
     for layer_name in layer_names: 
@@ -337,17 +310,63 @@ def main(args):
     
     
 
+model_steering = {
+    'meta-llama/Llama-3.2-3B-Instruct': {'layers': ['model.layers.13', 'model.layers.12', 'model.layers.14'], 'alphas_up': [1.5, 1.5, 1.5], 'alphas_down': [-0.5,  -1.0, -0.5], 'max_avg_tox': [0.765, 0.76, 0.735], 'min_avg_tox': [0.0, 0.0,  0.0]},
+
+    'google/gemma-2-2b': {'layers': ['model.layers.8', 'model.layers.6', 'model.layers.7', 'model.layers.13'], 'alphas_up': [1.5,  1.0, 1.0, 1.5], 'alphas_down': [-0.6,  -1.5, -1.5, -0.9], 'max_avg_tox': [0.355, 0.34, 0.315, 0.35], 'min_avg_tox': [0.1, 0.05, 0.04, 0.085]},
+    
+    'google/gemma-2-2b-it': {'layers': ['model.layers.10', 'model.layers.11', 'model.layers.12'], 'alphas_up': [1.5, 1.0, 1.0], 'alphas_down': [-0.3, -0.25, -0.2]},
+
+    'meta-llama/Llama-3.2-3B': {'layers': ['model.layers.3', 'model.layers.12', 'model.layers.11', 'model.layers.10'], 'alphas_up': [1.0, 1.0,  1.0, 1.0], 'alphas_down': [0.3, -1.5,  -1.0, -1.5], 'max_avg_tox': [0.605, 0.545, 0.6, 0.575], 'min_avg_tox': [0.385, 0.365, 0.385, 0.37]},
+
+    'allenai/OLMo-2-0425-1B-SFT': {'layers': ['model.layers.9',  'model.layers.10', 'model.layers.8'], 'alphas_up': [1.5, 1.5, 1.5], 'alphas_down': [-1.0, -0.5, -1.0], 'max_avg_tox': [0.645, 0.62, 0.565], 'min_avg_tox': [0.0, 0.0, 0.0]},
+
+    'allenai/OLMo-2-0425-1B-DPO': {'layers': ['model.layers.9', 'model.layers.7',  'model.layers.8'], 'alphas_up': [1.5, 1.5, 1.5], 'alphas_down': [-1.0, -1.0,  -1.0], 'max_avg_tox': [0.63, 0.58, 0.565], 'min_avg_tox': [0.0, 0.0,  0.0]},
+
+    'allenai/OLMo-2-0425-1B-Instruct': {'layers': [ 'model.layers.7', 'model.layers.8', 'model.layers.9'], 'alphas_up': [1.5, 1.5, 1.5], 'alphas_down': [ -1.0, -1.0, -1.0], 'max_avg_tox': [ 0.705, 0.69, 0.655], 'min_avg_tox': [ 0.0, 0.0, 0.0]},
+
+    'allenai/OLMo-2-0425-1B': {'layers': ['model.layers.13', 'model.layers.3', 'model.layers.7', 'model.layers.9'], 'alphas_up': [-0.2, 0.03, -0.07, -0.06], 'alphas_down': [-0.5, -1.5, -1.5, -1.5], 'max_avg_tox': [0.41, 0.395, 0.39, 0.385], 'min_avg_tox': [0.28, 0.12, 0.135, 0.135]},
+    }
+
+if __name__ == "__main__":
+    
+    # for _, model in enumerate(["google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct"]): #"google/gemma-2-2b-it",
+    args = parse_args()
+    model = args.model
+    args.dataset = "truthfulqa/truthful_qa"
+    args.cls_model = "allenai/truthfulqa-truth-judge-llama2-7B"
+    info = model_steering[model]
+    layers = info['layers']
+    alpha_pos = info['alphas_up']
+    alpha_neg = info['alphas_down']
+    args.model = model
+    for i in range(len(layers)):
+        args.steer_layer = layers[i]
+    #, "HateXplain", "ToxiGen", "RealToxicityPrompts"]
+        for j in range(2): # 0 - positive, 1 - negative
+            if j == 0:
+                args.alpha = alpha_pos[i]
+            else:
+                args.alpha = alpha_neg[i]
+            print(f"Running evaluation for model: {args.model} with alpha: {args.alpha} on layer: {args.steer_layer}")
+            main(args)
+        # # alpha = [ -1.0, -5.0, -10.0, -20.0] #-0.1, -0.3, -0.6, -0.9, -1.5, -2.0, -2.5, -3.0, -4.0, -4.5
+        # alpha = [1.0, 5.0, 10.0, 20.0] #[0.1, 0.3, 0.6, 0.9, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 4.5, 5.0, 10.0] 
+        # print(f"Running evaluation for model: {args.model} with alphas: {alpha}")
+        # for a in alpha:
+        #     args.alpha = a
+            # main(args)
 
         
 
 
-if __name__ == "__main__":
-    for i, model in enumerate(["google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct"]): #"google/gemma-2-2b-it",
-        args = parse_args()
-        args.model = model
-        # alpha = [ -1.0, -5.0, -10.0, -20.0] #-0.1, -0.3, -0.6, -0.9, -1.5, -2.0, -2.5, -3.0, -4.0, -4.5
-        alpha = [1.0, 5.0, 10.0, 20.0] #[0.1, 0.3, 0.6, 0.9, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 4.5, 5.0, 10.0] 
-        print(f"Running evaluation for model: {args.model} with alphas: {alpha}")
-        for a in alpha:
-            args.alpha = a
-            main(args)
+# if __name__ == "__main__":
+#     for i, model in enumerate(["google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct"]): #"google/gemma-2-2b-it",
+#         args = parse_args()
+#         args.model = model
+#         # alpha = [ -1.0, -5.0, -10.0, -20.0] #-0.1, -0.3, -0.6, -0.9, -1.5, -2.0, -2.5, -3.0, -4.0, -4.5
+#         alpha = [1.0, 5.0, 10.0, 20.0] #[0.1, 0.3, 0.6, 0.9, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 4.5, 5.0, 10.0] 
+#         print(f"Running evaluation for model: {args.model} with alphas: {alpha}")
+#         for a in alpha:
+#             args.alpha = a
+#             main(args)

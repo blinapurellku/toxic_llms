@@ -21,10 +21,11 @@ import torch.nn.functional as F
 from accelerate.utils import find_executable_batch_size
 from datasets import load_dataset
 from safetensors.torch import save_file as save_safetensors
-from templates import LLAMA_CLS_PROMPT, get_template
+from utils_templates import LLAMA_CLS_PROMPT, get_template
 from tqdm import tqdm
 from transformers import (AutoModelForCausalLM, AutoTokenizer,
                           BitsAndBytesConfig)
+from utils_load_dataset_and_models import load_model_and_tokenizer, load_classifier, load_dataset, classify_models_dict
 
 # ────────────────────────────────────────────────────────── constants ──
 TORCH_DT = torch.bfloat16
@@ -83,39 +84,6 @@ def _derive_layer_names(model) -> List[str]:
         raise ValueError("Could not determine transformer block count.")
     return ["embeddings"] + [f"layer_{i}" for i in range(n)]
 
-def load_model_and_tokenizer(
-    model_name: str,
-    bnb_config: bool = True,
-    output_hidden_states: bool = True,
-):
-    """Load model + tokenizer so hidden states are *always* produced."""
-
-   
-    tokenizer = AutoTokenizer.from_pretrained(model_name, padding_side="left", truncation_side="left")
-    tokenizer.pad_token = tokenizer.pad_token or tokenizer.eos_token
-
-    if bnb_config:
-        bnb_config = BitsAndBytesConfig(load_in_8bit=True, bnb_8bit_compute_dtype=torch.bfloat16)
-
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            # torch_dtype=torch.bfloat16,
-            quantization_config=bnb_config,
-            device_map=device, #"auto",
-            output_hidden_states=output_hidden_states,  # Enable hidden states output
-        ).eval()
-    else:
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            torch_dtype=torch.bfloat16,
-            device_map=device,  # "auto",
-            output_hidden_states=output_hidden_states,  # Enable hidden states output
-        ).eval()
-
-
-    model.config.pad_token_id = tokenizer.pad_token_id
-    # model.config.output_hidden_states = output_hidden_states  # Enable hidden states output
-    return model, tokenizer
 
 
 @contextmanager
@@ -351,8 +319,18 @@ def main(args):
     # args = parse_args()
     atten = args.atten
     
+    if args.bnb_config:
+        bnb_config_1 = BitsAndBytesConfig(load_in_8bit=True, bnb_8bit_compute_dtype=torch.bfloat16)
+    else:
+        bnb_config_1 = None
 
-    model, tokenizer = load_model_and_tokenizer(args.model, bnb_config=args.bnb_config, output_hidden_states=False)
+
+    safe_dataset = re.sub(r'[\\/*?:"<>|]', "_", args.dataset)
+    safe_model_name = re.sub(r'[\\/*?:"<>|]', "_", args.model)
+    cls_name = classify_models_dict[args.dataset] if args.dataset in classify_models_dict else None
+
+
+    model, tokenizer = load_model_and_tokenizer(args.model, device, bnb_config=args.bnb_config, output_hidden_states=False)
     pad_token_id = tokenizer.pad_token_id  # Save this for later use
 
     template = None
@@ -364,17 +342,12 @@ def main(args):
         )
         print("Using template", template["description"])
 
-    print("Loading the HarmBench dataset")
-    dataset = load_dataset("walledai/HarmBench", "standard")["train"]
-    count = min(args.num_prompts, len(dataset))
-    prompts = [ex["prompt"] for ex in dataset.select(range(count))]
-    print(f"Loaded {len(prompts)} prompts from HarmBench dataset.")
+    print("Loading dataset", args.dataset)
+    prompts = load_dataset(args.dataset)  # to verify it's available
+    data = args.dataset # toxigen/toxigen-data
+    print(f"Loaded dataset {data} with {len(prompts)} items.")
 
-    safe_model_name = re.sub(r'[\\/*?:"<>|]', "_", args.model)
-    os.makedirs(f"{args.output_dir}/{safe_model_name}", exist_ok=True)
-
-    save_path = os.path.join(args.output_dir, safe_model_name)
-
+    
     all_logits, all_masks, all_states = run_prompting(
         model,
         tokenizer,
@@ -392,7 +365,11 @@ def main(args):
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-    
+
+    os.makedirs(f"{args.output_dir}/{safe_model_name}", exist_ok=True)
+
+    save_path = os.path.join(args.output_dir, safe_model_name)
+
     print(f"Saving results to {save_path}")
     print(f"Logits shape: {all_logits.shape}")
     print(f"Attention masks shape: {all_masks.shape}")
@@ -441,41 +418,3 @@ if __name__ == "__main__":
         args.model=model
         main(args)
     # main()
-
-# def parse_args():
-#     p = argparse.ArgumentParser("Dump activations for HarmBench prompts.")
-#     p.add_argument("--model", default="google/gemma-2-2b")
-#     p.add_argument("--num_prompts", type=int, default=300)
-#     p.add_argument("--output_dir", default="./activations")
-#     p.add_argument("--batch_size", type=int, default=64)
-#     p.add_argument("--bnb", action="store_true",
-#                    help="load model in 8-bit (bits-and-bytes)")
-#     return p.parse_args()
-
-# def main():
-#     args   = parse_args()
-#     model, tok = load_model_and_tokenizer(args.model, args.bnb)
-
-#     dataset  = load_dataset("walledai/HarmBench", "standard")["train"]
-#     prompts  = [ex["prompt"] for ex in dataset.select(range(args.num_prompts))]
-#     print(f"Running {len(prompts)} prompts…")
-
-#     logits, masks, states = run_prompting(model, tok, prompts, args.batch_size)
-
-#     safe_name = re.sub(r'[\\/*?:"<>|]', "_", args.model)
-#     out_dir   = os.path.join(args.output_dir, safe_name)
-#     os.makedirs(out_dir, exist_ok=True)
-
-#     save_safetensors({"logits_before": logits}, os.path.join(out_dir, "logits_before.safetensors"))
-#     save_safetensors({"attn_masks": masks},     os.path.join(out_dir, "attention_mask.safetensors"))
-#     save_safetensors(states,                   os.path.join(out_dir, "hidden_states_pure.safetensors"))
-#     print("✓ Saved tensors to", out_dir)
-
-#     # clean-up
-#     del model, tok, logits, masks, states
-#     gc.collect()
-#     if torch.cuda.is_available():
-#         torch.cuda.empty_cache()
-
-# if __name__ == "__main__":
-#     main()
