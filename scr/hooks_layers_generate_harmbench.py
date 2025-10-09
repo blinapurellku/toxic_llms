@@ -220,6 +220,7 @@ def run_prompting(
             all_hidden = defaultdict(list)  # Store hidden states    
             all_hidden_sum = defaultdict(list)  # Store hidden states
             all_hidden_last = defaultdict(list)  # Store hidden states
+            all_hidden_s = defaultdict(list)  # Store hidden states
             for i in tqdm(range(0, len(prompts), bs), desc=f"Generating (bs={bs})"):
                 chunk = prompts[i : i + bs]
                 chunk_f = responses[i : i + bs] if responses else chunk
@@ -275,10 +276,16 @@ def run_prompting(
                             get_f = enc_f.attention_mask.sum(dim=1).clamp(min=1)  # (B, 1), to prevent divide-by-zero
                             l = enc.attention_mask.shape[1] #.clamp(min=1)  # (B, 1), to prevent divide-by-zero
                             use = []
+                            use_2 = []
                             for i in range(len(get_f)):
                                 use.append(h_state[i, l-get_f[i], :])
+                                use_2.append(h_state[i, :l-get_f[i], :].sum(dim=0))
+
                             h_states = torch.stack(use, dim=0) # (B, HD)
                             all_hidden[layer].append(h_states)
+
+                            h_states = torch.stack(use_2, dim=0) / get_f.unsqueeze(1)  # (B, HD)
+                            all_hidden_s[layer].append(h_states)
 
                         # all_hidden[layer].append(h_state)
 
@@ -300,9 +307,9 @@ def run_prompting(
                 
 
 
-            return all_hidden_sum, all_hidden_last, all_hidden
+            return all_hidden_sum, all_hidden_last, all_hidden, all_hidden_s
 
-        all_hidden_sum, all_hidden_last, all_hidden = _inner()
+        all_hidden_sum, all_hidden_last, all_hidden, all_hidden_s = _inner()
 
     all_hidden_sum = {layer: torch.cat(h_list, dim=0) for layer, h_list in all_hidden_sum.items()}
     print(all_hidden_sum[list(all_hidden_sum.keys())[0]].shape)
@@ -313,9 +320,10 @@ def run_prompting(
     all_hidden = {layer: torch.cat(h_list, dim=0) for layer, h_list in all_hidden.items()}
     print(all_hidden[list(all_hidden.keys())[0]].shape)
 
-    return all_hidden_sum, all_hidden_last, all_hidden
+    all_hidden_s = {layer: torch.cat(h_list, dim=0) for layer, h_list in all_hidden_s.items()}
+    print(all_hidden_s[list(all_hidden_s.keys())[0]].shape)
 
-
+    return all_hidden_sum, all_hidden_last, all_hidden, all_hidden_s
 
 def parse_args():
     p = argparse.ArgumentParser("Evaluate LLM for harmful behavior on HarmBench.")
@@ -393,6 +401,7 @@ def main(args):
 
     print("Loading the HarmBench dataset")
     dataset = load_dataset("walledai/HarmBench", "standard")["train"]
+    safe_data = re.sub(r'[\\/*?:"<>|]', "_", "walledai/HarmBench")
     dataset = dataset.filter(lambda ex: ex["prompt"] in set(df["prompt"]))  
     print(len(dataset))
     # Pick up to N prompts
@@ -401,7 +410,7 @@ def main(args):
 
     print(f"Loaded {len(prompts)} prompts from HarmBench dataset.") 
 
-    all_hidden_sum, all_hidden_last, all_hidden = run_prompting(
+    all_hidden_sum, all_hidden_last, all_hidden, all_hidden_s = run_prompting(
         model,
         tokenizer,
         prompts,
@@ -415,19 +424,24 @@ def main(args):
         
     print(f"Saving results to {save_path}")
     
-    save_safetensors(
-        all_hidden_sum,
-        os.path.join(save_path, f"hidden_states_gen_sum_answer.safetensors"),
-    )
+    # save_safetensors(
+    #     all_hidden_sum,
+    #     os.path.join(save_path, f"hidden_states_gen_sum_answer.safetensors"),
+    # )
+
+    # save_safetensors(
+    #     all_hidden_last,
+    #     os.path.join(save_path, f"hidden_states_gen_last_answer.safetensors"),
+    # )
+
+    # save_safetensors(
+    #     all_hidden,
+    #     os.path.join(save_path, f"hidden_states_gen_answer.safetensors"),
+    # )
 
     save_safetensors(
-        all_hidden_last,
-        os.path.join(save_path, f"hidden_states_gen_last_answer.safetensors"),
-    )
-
-    save_safetensors(
-        all_hidden,
-        os.path.join(save_path, f"hidden_states_gen_answer.safetensors"),
+        all_hidden_s,
+        os.path.join(save_path, f"hidden_states_gen_s_answer_{safe_data}.safetensors"),
     )
 
     refusal_responses = [
@@ -464,7 +478,7 @@ def main(args):
     # If you want a random permutation (shuffled order each time)
     random.shuffle(expanded_responses)
 
-    all_hidden_sum, all_hidden_last, all_hidden = run_prompting(
+    all_hidden_sum, all_hidden_last, all_hidden, all_hidden_s = run_prompting(
         model,
         tokenizer,
         prompts,
@@ -484,25 +498,32 @@ def main(args):
     
     print(f"Saving results to {save_path}")
     
-    save_safetensors(
-        all_hidden_sum,
-        os.path.join(save_path, f"hidden_states_gen_sum_refusal.safetensors"),
-    )
+    # save_safetensors(
+    #     all_hidden_sum,
+    #     os.path.join(save_path, f"hidden_states_gen_sum_refusal.safetensors"),
+    # )
+
+    # save_safetensors(
+    #     all_hidden_last,
+    #     os.path.join(save_path, f"hidden_states_gen_last_refusal.safetensors"),
+    # )
+
+    # save_safetensors(
+    #     all_hidden,
+    #     os.path.join(save_path, f"hidden_states_gen_refusal.safetensors"),
+    # )
 
     save_safetensors(
-        all_hidden_last,
-        os.path.join(save_path, f"hidden_states_gen_last_refusal.safetensors"),
-    )
-
-    save_safetensors(
-        all_hidden,
-        os.path.join(save_path, f"hidden_states_gen_refusal.safetensors"),
+        all_hidden_s,
+        os.path.join(save_path, f"hidden_states_gen_s_refusal_{safe_data}.safetensors"),
     )
 
 
 if __name__ == "__main__":
     args = parse_args()
-    for model in ["google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct", "allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct"]: #"google/gemma-2-2b", "meta-llama/Llama-3.2-3B"]:
+    for model in [ #"allenai/OLMo-2-0425-1B", "google/gemma-2-2b" ]: #, 
+        "allenai/OLMo-2-0425-1B-Instruct","google/gemma-2-2b-it"]:
+        # "google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct", "allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct"]: #"google/gemma-2-2b", "meta-llama/Llama-3.2-3B"]:
         args.model = model
         print(f"Processing model {model}")
         main(args)

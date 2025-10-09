@@ -1,5 +1,4 @@
 import argparse
-from dataclasses import dataclass
 import os
 import re
 from typing import Dict, Optional, Tuple, Any
@@ -14,13 +13,24 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from safetensors.torch import load_file as load_safetensors
-from sklearn.metrics import accuracy_score, average_precision_score, balanced_accuracy_score, log_loss, roc_auc_score
+from sklearn.metrics import (
+    accuracy_score,
+    average_precision_score,
+    balanced_accuracy_score,
+    log_loss,
+    roc_auc_score,
+)
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import SGDClassifier
-from numpy.typing import NDArray
+from sklearn.linear_model import LogisticRegression, SGDClassifier, RidgeClassifier
+from sklearn.svm import LinearSVC
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+from sklearn.naive_bayes import GaussianNB
 from sklearn.utils import shuffle as sk_shuffle
 from sklearn.decomposition import PCA
+from dataclasses import dataclass
+from numpy.typing import NDArray
 
 
 # Optional: avoid error spam from Torch Dynamo
@@ -37,6 +47,280 @@ if torch.cuda.is_available():
 # torch.use_deterministic_algorithms(True)
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+
+# Optional: PyTorch for pairwise-AUC surrogate
+try:
+    import torch
+    TORCH_OK = True
+except Exception:
+    TORCH_OK = False
+
+
+def _has_proba(clf) -> bool:
+    return hasattr(clf, "predict_proba")
+
+
+def _safe_predict_proba(clf, X) -> Optional[np.ndarray]:
+    if hasattr(clf, "predict_proba"):
+        proba = clf.predict_proba(X)
+        # Some classifiers return shape (n, 2) but classes may be in {0,1} or reversed
+        return proba
+    elif hasattr(clf, "decision_function"):
+        # Return uncalibrated scores as a single-column "prob-like" via logistic link
+        z = clf.decision_function(X)
+        # map to (0,1) with a sigmoid for reporting; not calibrated
+        return 1.0 / (1.0 + np.exp(-z.reshape(-1, 1))) if z.ndim == 1 else \
+               1.0 / (1.0 + np.exp(-z[:, 0:1]))
+    else:
+        return None
+
+
+def _evaluate(clf, Xtr, ytr, Xte, yte, classes=(0,1)) -> Dict[str, float]:
+    out = {}
+    # Train-set
+    yhat_tr = clf.predict(Xtr)
+    out["train_acc"] = accuracy_score(ytr, yhat_tr)
+    out["train_bal_acc"] = balanced_accuracy_score(ytr, yhat_tr)
+
+    proba_tr = _safe_predict_proba(clf, Xtr)
+    if proba_tr is not None:
+        # determine positive column
+        if hasattr(clf, "classes_"):
+            classes_ = np.array(clf.classes_)
+            pos_idx = int(np.where(classes_ == 1)[0][0])
+        else:
+            pos_idx = 0
+        out["train_auc"] = roc_auc_score(ytr, proba_tr[:, pos_idx])
+        # For models without true probs, this is "pseudo" CE — still useful for comparison
+        out["train_loss"] = log_loss(ytr, proba_tr, labels=np.array(classes))
+    else:
+        out["train_auc"] = np.nan
+        out["train_loss"] = np.nan
+
+    # Test-set
+    yhat_te = clf.predict(Xte)
+    out["test_acc"] = accuracy_score(yte, yhat_te)
+    out["test_bal_acc"] = balanced_accuracy_score(yte, yhat_te)
+
+    proba_te = _safe_predict_proba(clf, Xte)
+    if proba_te is not None:
+        if hasattr(clf, "classes_"):
+            classes_ = np.array(clf.classes_)
+            pos_idx = int(np.where(classes_ == 1)[0][0])
+        else:
+            pos_idx = 0
+        out["test_auc"] = roc_auc_score(yte, proba_te[:, pos_idx])
+        out["test_loss"] = log_loss(yte, proba_te, labels=np.array(classes))
+    else:
+        out["test_auc"] = np.nan
+        out["test_loss"] = np.nan
+
+    return out
+
+
+@dataclass
+class ProbeResult:
+    model: Any
+    scaler: Optional[StandardScaler]
+    metrics: Dict[str, float]
+    method: str
+    info: Dict[str, Any]
+
+
+def train_linear_probe_choice(
+    X: np.ndarray,
+    y: np.ndarray,
+    *,
+    method: str = "logreg_en",            # see options below
+    test_size: float = 0.2,
+    random_state: int = 42,
+    standardize: bool = True,
+    calibrate: bool = False,              # calibrate models that lack predict_proba
+    class_weight: Optional[str] = None,   # e.g., "balanced"
+    max_iter: int = 5000,
+    # Elastic-net knobs for logistic
+    C: float = 1.0,
+    l1_ratio: float = 0.5,
+    # SGD knobs
+    sgd_alpha: float = 1e-4,
+    # Pairwise AUC surrogate knobs (if method="pairwise_auc")
+    pair_lr: float = 1e-2,
+    pair_weight_decay: float = 1e-4,
+    pair_steps: int = 2000,
+    pair_batch_pos: int = 256,
+    pair_neg_per_pos: int = 5,
+) -> ProbeResult:
+    """
+    Train a linear probe using one of several methods.
+
+    Methods:
+      - "logreg_l2"      : Logistic regression (L2)
+      - "logreg_l1"      : Logistic regression (L1, sparse)
+      - "logreg_en"      : Logistic regression (elastic-net via saga)
+      - "sgd_hinge"      : Linear SVM via SGD (hinge)
+      - "linear_svc"     : LinearSVC (margin SVM)
+      - "sgd_log"        : Logistic via SGD (log_loss)
+      - "modified_huber" : SGDClassifier (modified_huber)
+      - "ridge_cls"      : RidgeClassifier (least-squares style)
+      - "lda_shrink"     : LinearDiscriminantAnalysis with shrinkage
+      - "gaussian_nb"    : Gaussian Naive Bayes (no L2 head but linear in log space)
+      - "pairwise_auc"   : Pairwise logistic ranking surrogate (targets AUC)
+    """
+    assert X.ndim == 2 and y.ndim == 1
+    Xtr, Xte, ytr, yte = train_test_split(
+        X, y, test_size=test_size, stratify=y, random_state=random_state
+    )
+
+    scaler = None
+    Xt_tr, Xt_te = Xtr, Xte
+
+    # Some models behave better on standardized features (most of them).
+    # We'll skip scaling for GaussianNB by default.
+    if standardize and method not in {"gaussian_nb"}:
+        scaler = StandardScaler().fit(Xtr)
+        Xt_tr = scaler.transform(Xtr)
+        Xt_te = scaler.transform(Xte)
+
+    model = None
+    info: Dict[str, Any] = {}
+
+    if method == "logreg_l2":
+        model = LogisticRegression(
+            penalty="l2", solver="lbfgs", C=C, max_iter=max_iter, n_jobs=-1,
+            class_weight=class_weight
+        ).fit(Xt_tr, ytr)
+
+    elif method == "logreg_l1":
+        model = LogisticRegression(
+            penalty="l1", solver="saga", C=C, max_iter=max_iter, n_jobs=-1,
+            class_weight=class_weight
+        ).fit(Xt_tr, ytr)
+
+    elif method == "logreg_en":
+        model = LogisticRegression(
+            penalty="elasticnet", solver="saga", l1_ratio=l1_ratio, C=C,
+            max_iter=max_iter, n_jobs=-1, class_weight=class_weight
+        ).fit(Xt_tr, ytr)
+
+    elif method == "sgd_log":
+        model = SGDClassifier(
+            loss="log_loss", alpha=sgd_alpha, max_iter=max_iter, tol=1e-3,
+            class_weight=class_weight, random_state=random_state
+        ).fit(Xt_tr, ytr)
+
+    elif method == "sgd_hinge":
+        model = SGDClassifier(
+            loss="hinge", alpha=sgd_alpha, max_iter=max_iter, tol=1e-3,
+            class_weight=class_weight, random_state=random_state
+        ).fit(Xt_tr, ytr)
+
+    elif method == "modified_huber":
+        model = SGDClassifier(
+            loss="modified_huber", alpha=sgd_alpha, max_iter=max_iter, tol=1e-3,
+            class_weight=class_weight, random_state=random_state
+        ).fit(Xt_tr, ytr)
+
+    elif method == "linear_svc":
+        base = LinearSVC(
+            C=C, class_weight=class_weight, max_iter=max_iter, tol=1e-3,
+            random_state=random_state
+        ).fit(Xt_tr, ytr)
+        # Optionally wrap with calibrator to get probabilities
+        if calibrate:
+            model = CalibratedClassifierCV(base, cv=3, method="sigmoid").fit(Xt_tr, ytr)
+        else:
+            model = base
+
+    elif method == "ridge_cls":
+        model = RidgeClassifier(alpha=sgd_alpha if sgd_alpha is not None else 1e-2).fit(Xt_tr, ytr)
+
+    elif method == "lda_shrink":
+        # LDA generally assumes roughly standardized features; we already scaled.
+        # Shrinkage helps a lot in high-D, low-N
+        model = LinearDiscriminantAnalysis(solver="lsqr", shrinkage="auto").fit(Xt_tr, ytr)
+
+    elif method == "gaussian_nb":
+        # NB works on raw scale; use unscaled X
+        model = GaussianNB().fit(Xtr, ytr)   # note: fits on Xtr, not Xt_tr
+        Xt_tr, Xt_te = Xtr, Xte              # evaluation will use unscaled
+
+    elif method == "pairwise_auc":
+        if not TORCH_OK:
+            raise RuntimeError("PyTorch not available for pairwise AUC surrogate.")
+        # Simple linear weight trained with pairwise logistic ranking
+        Xf = Xt_tr.astype(np.float32)
+        yf = ytr.astype(np.float32)
+
+        Xpos = Xf[yf == 1]
+        Xneg = Xf[yf == 0]
+        D = Xf.shape[1]
+
+        w = torch.zeros(D, requires_grad=True)
+        opt = torch.optim.AdamW([w], lr=pair_lr, weight_decay=pair_weight_decay)
+
+        Xpos_t = torch.from_numpy(Xpos)
+        Xneg_t = torch.from_numpy(Xneg)
+
+        for step in range(pair_steps):
+            B = min(pair_batch_pos, len(Xpos_t))
+            k = pair_neg_per_pos
+
+            ip = Xpos_t[torch.randint(len(Xpos_t), (B,))]
+            ineg = Xneg_t[torch.randint(len(Xneg_t), (B, k))]
+            diff = ip[:, None, :] - ineg          # (B, k, D)
+            scores = torch.einsum("bkd,d->bk", diff, w)  # (B, k)
+            loss = torch.log1p(torch.exp(-scores)).mean()
+
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+
+        # Wrap into a scikit-learn-like predictor
+        class PairwiseAUCProbe:
+            def __init__(self, w_vec):
+                self.coef_ = w_vec[None, :].astype(np.float32)
+                self.intercept_ = np.array([0.0], dtype=np.float32)
+                self.classes_ = np.array([0, 1], dtype=int)
+
+            def decision_function(self, X):
+                return X @ self.coef_[0] + self.intercept_[0]
+
+            def predict_proba(self, X):
+                z = self.decision_function(X)
+                p1 = 1.0 / (1.0 + np.exp(-z))
+                p0 = 1.0 - p1
+                return np.vstack([p0, p1]).T
+
+            def predict(self, X):
+                return (self.decision_function(X) >= 0.0).astype(int)
+
+        model = PairwiseAUCProbe(w.detach().numpy())
+
+    else:
+        raise ValueError(f"Unknown method: {method}")
+
+    # Evaluate
+    metrics = _evaluate(model, Xt_tr, ytr, Xt_te, yte)
+    info = {"scaler": scaler,                 # may be None (e.g., GaussianNB)
+        "steps_taken": np.nan,            # not tracked for these solvers
+        "stopped_early": False,           # N/A
+        "history": {"step": [], "train_loss": [], "val_loss": []},  # placeholder for compatibility
+        "final_metrics": metrics,}
+    return model, info
+    # return ProbeResult(
+    #     model=model,
+    #     scaler=scaler,
+    #     metrics=metrics,
+    #     method=method,
+    #     info=dict(
+    #         n_train=len(ytr),
+    #         n_test=len(yte),
+    #         standardize=standardize,
+    #         calibrated=calibrate if method in {"linear_svc"} else _has_proba(model),
+    #     ),
+    # )
+
 
 
 def pairwise_auc(dist: torch.Tensor, true_dist: torch.Tensor) -> float:
@@ -60,171 +344,6 @@ def pairwise_auc(dist: torch.Tensor, true_dist: torch.Tensor) -> float:
     ap  = average_precision_score(y_true, y_score)
     auc = roc_auc_score(y_true, y_score)
     return auc, ap
-
-@dataclass
-class ProbeResult:
-    model: Any
-    scaler: Optional[StandardScaler]
-    metrics: Dict[str, float]
-    method: str
-    info: Dict[str, Any]
-    
-def train_linear_probe(
-    activations: NDArray[np.floating],
-    labels: NDArray[np.integer],
-    *,
-    test_size: float = 0.2,
-    random_seed: int = SEED,
-    max_steps: int = 1000,
-    verbose: bool = True,
-    early_stopping: bool = True,
-    patience: int = 8,
-    threshold: float = 1e-5,
-    warmup_steps: int = 2,
-    model_kwargs: Optional[Dict[str, Any]] = None,
-) -> Tuple[SGDClassifier, Dict[str, Any]]:
-    """
-    Train a linear probe (logistic regression via SGD) on (N,D) activations with binary labels (0/1).
-    """
-
-    assert activations.ndim == 2, "Expected shape (N, D)"
-    assert labels.ndim == 1 and set(np.unique(labels)) <= {0, 1}, "Labels must be 0/1"
-
-    default_kwargs = dict(
-        learning_rate="optimal",   # robust schedule
-        alpha=1e-4,                # L2 strength
-        eta0=0.0,                  # ignored by "optimal"
-        penalty="l2",
-        # class_weight="balanced",   # helpful if imbalanced
-        shuffle=True               # internal shuffle within partial_fit call
-    )
-    # default kwargs
-    if model_kwargs is None:
-        model_kwargs = default_kwargs
-    else:
-        tmp = default_kwargs.copy(); tmp.update(model_kwargs)
-        model_kwargs = tmp
-
-
-    # Shuffle + fixed split
-    X, y = sk_shuffle(activations, labels, random_state=random_seed)
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=test_size, stratify=y, random_state=random_seed
-    )
-
-    # --- FIT SCALER ONCE (IMPORTANT) ---
-    scaler = StandardScaler().fit(X_train)
-    X_train_s = scaler.transform(X_train)
-    X_test_s  = scaler.transform(X_test)
-
-    # pca = PCA(n_components=0.9, random_state=random_seed).fit(X_train_s)
-    # X_train_s = pca.transform(X_train_s)
-    # X_test_s  = pca.transform(X_test_s)
-
-    clf = SGDClassifier(loss="log_loss", random_state=random_seed, **model_kwargs)
-
-    history = {"step": [], "train_loss": [], "val_loss": []}
-    best_val = np.inf
-    no_improve = 0
-    stopped_early = False
-
-    steps_taken = 0
-    CLASSES = np.array([0, 1])
-
-    while steps_taken < max_steps:
-        steps_taken += 1
-
-        if not early_stopping or steps_taken <= warmup_steps:
-            # NO scaler.partial_fit here
-            clf.partial_fit(X_train_s, y_train, classes=CLASSES)
-
-            probs = clf.predict_proba(X_train_s)
-            tr_loss = log_loss(y_train, probs, labels=CLASSES)
-
-            history["step"].append(steps_taken)
-            history["train_loss"].append(tr_loss)
-            history["val_loss"].append(np.nan)
-        else:
-            Xtr, Xva, ytr, yva = train_test_split(
-                X_train_s, y_train, test_size=test_size, stratify=y_train, random_state=random_seed
-            )
-            # NO scaler.partial_fit here either
-            clf.partial_fit(Xtr, ytr)
-
-            tr_loss = log_loss(ytr, clf.predict_proba(Xtr), labels=CLASSES)
-            va_loss = log_loss(yva, clf.predict_proba(Xva), labels=CLASSES)
-
-            history["step"].append(steps_taken)
-            history["train_loss"].append(tr_loss)
-            history["val_loss"].append(va_loss)
-
-            if va_loss + threshold < best_val:
-                best_val = va_loss
-                no_improve = 0
-            else:
-                no_improve += 1
-                if no_improve >= patience:
-                    stopped_early = True
-                    break
-
-    # --- Final evaluation (train + test) ---
-    probs_train = clf.predict_proba(X_train_s)
-    preds_train = clf.predict(X_train_s)
-    train_loss = log_loss(y_train, probs_train, labels=CLASSES)
-    train_acc = accuracy_score(y_train, preds_train)
-    train_bal_acc = balanced_accuracy_score(y_train, preds_train)
-    # AUC needs the probability of class=1
-    pos_idx = int(np.where(clf.classes_ == 1)[0][0])
-    train_auc = roc_auc_score(y_train, probs_train[:, pos_idx])
-    
-
-
-    probs_test = clf.predict_proba(X_test_s)
-    preds_test = clf.predict(X_test_s)
-    test_loss = log_loss(y_test, probs_test, labels=CLASSES)
-    test_acc = accuracy_score(y_test, preds_test)
-    test_bal_acc = balanced_accuracy_score(y_test, preds_test)
-    test_auc = roc_auc_score(y_test, probs_test[:, pos_idx])
-
-
-    if verbose:
-        tag = " (early stopped)" if stopped_early else ""
-        print(f"Steps taken: {steps_taken}{tag}")
-        print(f"Train CE: {train_loss:.4f} | Train Acc: {train_acc:.4f} | Train BalAcc: {train_bal_acc:.4f}")
-        print(f"Test  CE: {test_loss:.4f} | Test  Acc: {test_acc:.4f} | Test  BalAcc: {test_bal_acc:.4f}")
-
-    info = {
-        "scaler": scaler,
-        "steps_taken": steps_taken,
-        "stopped_early": stopped_early,
-        "history": history,
-        "final_metrics": {
-            "train_loss": train_loss,
-            "train_acc": train_acc,
-            "train_bal_acc": train_bal_acc,
-            "test_loss": test_loss,
-            "test_acc": test_acc,
-            "test_bal_acc": test_bal_acc,
-            "train_auc": train_auc,
-            "test_auc": test_auc,
-        },
-    }
-    metrics = info["final_metrics"]
-    method = "sgd_log"
-    return clf, info
-    # return ProbeResult(
-    #     model=model,
-    #     scaler=scaler,
-    #     metrics=metrics,
-    #     method=method,
-    #     info=dict(
-    #         n_train=len(ytr),
-    #         n_test=len(yte),
-    #         standardize=standardize,
-    #         calibrated=calibrate if method in {"linear_svc"} else _has_proba(model),
-    #     ),
-    # )
-    
 
 
 def parse_args():
@@ -267,18 +386,14 @@ def main(args):
     save_path = os.path.join(args.output_dir, safe_model_name, "linear_probes")
     os.makedirs(save_path, exist_ok=True)
     safe_data = re.sub(r'[\\/*?:"<>|]', "_", "walledai/HarmBench")
-    t = "_last_" # _sum_ or _ or _s_
+    t = "_sum_" # _sum_ or _
     hidden_states_refusal = load_safetensors(
         os.path.join(save_path, f"hidden_states_gen{t}refusal_{safe_data}.safetensors")
-        # os.path.join(save_path, f"hidden_states_gen{t}refusal.safetensors")
-
     )
     label_refusal = [0 for _ in range(len(hidden_states_refusal[list(hidden_states_refusal.keys())[0]]))]
 
     hidden_states_answer = load_safetensors(
         os.path.join(save_path, f"hidden_states_gen{t}answer_{safe_data}.safetensors")
-        # os.path.join(save_path, f"hidden_states_gen{t}answer.safetensors")
-
     )
     label_answer = [1 for _ in range(len(hidden_states_answer[list(hidden_states_answer.keys())[0]]))]
 
@@ -389,9 +504,9 @@ def main(args):
 
     ##############################################
     # other anaylsis (acc over the )
+
     save_path_fig = os.path.join('/home/fe/purelku/Desktop/Master_thesis', "results_linear_probes", safe_model_name)
     os.makedirs(save_path_fig, exist_ok=True)
-    
     
     layer_names = list(probes_report.keys())
 
@@ -470,9 +585,9 @@ def main(args):
     ax.axhline(y=0.5, color='gray', linestyle='--', linewidth=1, label="Random Guess")
     # ax.plot(layer_names, g_aps,   marker='s', label="Gen AP")
 
-    ax.set_title(f"Pairwise Score ({args.model}) ({t})")
+    ax.set_title(f"Accuracy per Layer ({args.model}) ({t})")
     ax.set_xlabel("Layer")
-    ax.set_ylabel("Score")
+    ax.set_ylabel("Accuracy")
     ax.legend()
     ax.tick_params(axis='x', rotation=90)
 
@@ -493,12 +608,12 @@ def main(args):
         pca = PCA(n_components=2, random_state=42).fit(X)
         Z = pca.transform(X)
 
-        h_X = hidden_states_all[layer]
+        h_X = hidden_states_all[layer_name]
         y_labels = np.asarray(y_labels, dtype=int).ravel()
         h_X = torch.nn.functional.normalize(h_X.float(), p=2, dim=1)
         h_X = PCA(n_components=2, random_state=42).fit_transform(h_X.numpy())
-        # ax.scatter(h_X[y_labels == 0, 0], h_X[y_labels == 0, 1], s=6, marker='x', c="blue", alpha=0.3, label="gen label=0")
-        # ax.scatter(h_X[y_labels == 1, 0], h_X[y_labels == 1, 1], s=6, marker='x', c="red",  alpha=0.3, label="gen label=1")
+        # ax.scatter(h_X[y_labels == 0, 0], h_X[y_labels == 0, 1], s=6, marker='x', c="blue", alpha=0.3, label="all label=0")
+        # ax.scatter(h_X[y_labels == 1, 0], h_X[y_labels == 1, 1], s=6, marker='x', c="red",  alpha=0.3, label="all label=1")
         ax.scatter(Z[labels == 0, 0], Z[labels == 0, 1], s=12, c="blue", alpha=0.7, label="label=0")
         ax.scatter(Z[labels == 1, 0], Z[labels == 1, 1], s=12, c="red",  alpha=0.7, label="label=1")
         evr = pca.explained_variance_ratio_.sum()
@@ -508,7 +623,7 @@ def main(args):
         ax.legend(loc="best", frameon=True)
 
     plt.tight_layout()
-    plt.savefig(f"{save_path_fig}/linear_probe_{safe_model_name}{t}{safe_data}_sgd_log.png")
+    plt.savefig(f"linear_probe_acc_loss_history_pca_{safe_model_name}{t}_{safe_data}.png")
 
     
     ###############################################
