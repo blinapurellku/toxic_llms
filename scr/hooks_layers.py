@@ -111,7 +111,7 @@ def capture_all_layers(model,
             # if move_to_cpu:
             #     h = h.to("cpu", non_blocking=True)
             store[name].append(h.bfloat16())
-            print(store[name][-1].shape)
+            # print(store[name][-1].shape)
             return out
         return _hook
     

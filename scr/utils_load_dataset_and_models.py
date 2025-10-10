@@ -214,7 +214,7 @@ def load_classifier(data_name, device, bnb_config: Optional[BitsAndBytesConfig] 
 
         model = AutoModelForCausalLM.from_pretrained(
             cls_model,
-            quantization_config=bnb_config_1,
+            # quantization_config=bnb_config_1,
             dtype=torch.bfloat16, #if torch.cuda.is_available() else torch.float32,
             device_map=device,  # "auto",
             token=os.getenv("HUGGINGFACEHUB_API_TOKEN"), 
@@ -224,6 +224,7 @@ def load_classifier(data_name, device, bnb_config: Optional[BitsAndBytesConfig] 
         tokenizer = AutoTokenizer.from_pretrained(
             cls_model, padding_side="left", truncation_side="left", token=os.getenv("HUGGINGFACEHUB_API_TOKEN"), cache_dir="/hf",
         )
+
         template = BEAVER_TRAILS_PROMPT
 
     elif data_name == 'classifier_function':

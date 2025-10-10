@@ -368,6 +368,6 @@ if __name__ == "__main__":
     for _, model in enumerate(["google/gemma-2-2b", "meta-llama/Llama-3.2-3B", "allenai/OLMo-2-0425-1B", "google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct", "allenai/OLMo-2-0425-1B-Instruct"]): #"google/gemma-2-2b-it", , "allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO"
         
         args.model = model
-        args.dataset = ["walledai/AdvBench", "walledai/DTStereotype", "walledai/CatHarmfulQA","walledai/DTToxicity","truthfulqa/truthful_qa"]
+        args.dataset = ["walledai/AdvBench", "walledai/DTStereotype", "walledai/CatHarmfulQA","walledai/DTToxicity","walledai/DTToxicity_gpt4","truthfulqa/truthful_qa"]
         main(args)
     # "google/gemma-2-2b", "meta-llama/Llama-3.2-3B", "allenai/OLMo-2-0425-1B" "LibrAI/do-not-answer"-this doesn't work
