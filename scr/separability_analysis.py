@@ -209,8 +209,7 @@ def bootstrap_disentanglement_ratio(features, labels, n_bootstrap=100):
 
 def parse_args():
     p = argparse.ArgumentParser("Evaluate LLM for harmful behavior on HarmBench.")
-    p.add_argument("--models", default=["allenai/OLMo-2-0425-1B", "allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct"])
-    #["meta-llama/Llama-3.2-3B", "meta-llama/Llama-3.2-3B-Instruct", "google/gemma-2-2b","google/gemma-2-2b-it"] )#["allenai/OLMo-2-0425-1B", "allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct"] ) # meta-llama/Llama-3.1-8B, google/gemma-2-2b-it, meta-llama/Llama-3.2-3B-Instruct, meta-llama/Llama-3.2-3B, google/gemma-7b
+    p.add_argument("--models", default=["Qwen/Qwen2.5-3B", "Qwen/Qwen2.5-3B-Instruct","allenai/OLMo-2-0425-1B",  "allenai/OLMo-2-0425-1B-Instruct", "meta-llama/Llama-3.2-3B", "meta-llama/Llama-3.2-3B-Instruct", "google/gemma-2-2b","google/gemma-2-2b-it"] )#["allenai/OLMo-2-0425-1B", "allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct"] ) # meta-llama/Llama-3.1-8B, google/gemma-2-2b-it, meta-llama/Llama-3.2-3B-Instruct, meta-llama/Llama-3.2-3B, google/gemma-7b
     p.add_argument("--cls_model", default="cais/HarmBench-Llama-2-13b-cls") #cais/HarmBench-Llama-2-13b-cls, cais/HarmBench-Mistral-7b-val-cls
 
     p.add_argument(
@@ -285,9 +284,9 @@ def main():
         #     os.path.join(save_path, f"summed_attention_pattern_responses_steered.pt")
         # )
 
-        attn_patterns = load_safetensors(
-            os.path.join(save_path, f"attention_state_pure.safetensors")
-        )
+        # attn_patterns = load_safetensors(
+        #     os.path.join(save_path, f"attention_state_pure.safetensors")
+        # )
 
     
 
@@ -350,26 +349,26 @@ def main():
             ari_by_model[model+'s'][layer_name] = ari_s #disentanglement_ratio
             dis_ratio_model[model+'s'][layer_name] = [dis_s, z_score_disent_s, fisher_ratio_s]
 
-        for layer_name, attn_data in attn_patterns.items():
+        # for layer_name, attn_data in attn_patterns.items():
 
-            pos_side = attn_data[labels == 0].float().mean(dim=0) #.numpy() [H x HD]
-            neg_side = attn_data[labels == 1].float().mean(dim=0) #.numpy() [H x HD]
-            # print(pos_side.shape, neg_side.shape)
+        #     pos_side = attn_data[labels == 0].float().mean(dim=0) #.numpy() [H x HD]
+        #     neg_side = attn_data[labels == 1].float().mean(dim=0) #.numpy() [H x HD]
+        #     # print(pos_side.shape, neg_side.shape)
             
-            per_head_cos = 1 - F.cosine_similarity(neg_side, pos_side, dim=-1)  # shape: [H]
+        #     per_head_cos = 1 - F.cosine_similarity(neg_side, pos_side, dim=-1)  # shape: [H]
 
-            pos_n = F.normalize(pos_side, p=2, dim=-1, eps=1e-8)   # [H, HD]
-            neg_n = F.normalize(neg_side, p=2, dim=-1, eps=1e-8)   # [H, HD]
+        #     pos_n = F.normalize(pos_side, p=2, dim=-1, eps=1e-8)   # [H, HD]
+        #     neg_n = F.normalize(neg_side, p=2, dim=-1, eps=1e-8)   # [H, HD]
 
-            # Per-head Euclidean distance (H1↔H1, …):
-            per_head_dist = (neg_n - pos_n).norm(p=2, dim=-1)  # [H]
-            # print(per_head_cos.shape)
-            attention_by_model[model][layer_name] = {
-                "cosine": per_head_cos.numpy(),
-                "euclidean": per_head_dist.numpy(),
-                "pos_side": pos_side.numpy(),
-                "neg_side": neg_side.numpy()
-            }
+        #     # Per-head Euclidean distance (H1↔H1, …):
+        #     per_head_dist = (neg_n - pos_n).norm(p=2, dim=-1)  # [H]
+        #     # print(per_head_cos.shape)
+        #     attention_by_model[model][layer_name] = {
+        #         "cosine": per_head_cos.numpy(),
+        #         "euclidean": per_head_dist.numpy(),
+        #         "pos_side": pos_side.numpy(),
+        #         "neg_side": neg_side.numpy()
+        #     }
 
 
 
@@ -461,7 +460,7 @@ def main():
         #     }
 
     # Plotting
-    colors = ['blue', 'orange', 'green', 'red']
+    colors = ['blue', 'orange', 'green', 'red', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan']
     plt.figure(figsize=(16, 14))
     plt.subplot(3, 2, 1)
     plt.title("Adjusted Rand Index per Layer")
@@ -605,110 +604,110 @@ def main():
 
     k = "euclidean" #, "entropy", "sum_to_last", "sum", "max" euclidean cosine
     v = "mean" # "max" "mean"
+'''below is for attention patterns visualization, currently commented out'''
+    # plt.figure(figsize=(16, 14))
+    # iterator = 1
+    # entropy_all = []
+    # entropy_std = []
+    # for model_name, attn_dict in attention_by_model.items():
+    #     # print('Layer names:', list(attn_dict.keys()))
+    #     layer_names = list(attn_dict.keys())
+    #     sorted_names = sorted(layer_names, key=lambda s: int(s.split('.')[2]))
+    #     print(sorted_names)
 
-    plt.figure(figsize=(16, 14))
-    iterator = 1
-    entropy_all = []
-    entropy_std = []
-    for model_name, attn_dict in attention_by_model.items():
-        # print('Layer names:', list(attn_dict.keys()))
-        layer_names = list(attn_dict.keys())
-        sorted_names = sorted(layer_names, key=lambda s: int(s.split('.')[2]))
-        print(sorted_names)
+    #     entropy_diff = [attn_dict[layer][k] for layer in sorted_names]
 
-        entropy_diff = [attn_dict[layer][k] for layer in sorted_names]
+    #     en = [attn_dict[layer][k].mean() for layer in sorted_names]
+    #     en_s = [attn_dict[layer][k].std() for layer in sorted_names]
+    #     entropy_all.append(en)
+    #     entropy_std.append(en_s)
 
-        en = [attn_dict[layer][k].mean() for layer in sorted_names]
-        en_s = [attn_dict[layer][k].std() for layer in sorted_names]
-        entropy_all.append(en)
-        entropy_std.append(en_s)
+    #     if v == "mean":
+    #         entropy_neg = [attn_dict[layer]["neg_side"].mean(-1) for layer in sorted_names]
+    #         entropy_pos = [attn_dict[layer]["pos_side"].mean(-1) for layer in sorted_names]
+    #     else:
+    #         entropy_neg = [attn_dict[layer]["neg_side"].max(-1) for layer in sorted_names]
+    #         entropy_pos = [attn_dict[layer]["pos_side"].max(-1) for layer in sorted_names]
 
-        if v == "mean":
-            entropy_neg = [attn_dict[layer]["neg_side"].mean(-1) for layer in sorted_names]
-            entropy_pos = [attn_dict[layer]["pos_side"].mean(-1) for layer in sorted_names]
-        else:
-            entropy_neg = [attn_dict[layer]["neg_side"].max(-1) for layer in sorted_names]
-            entropy_pos = [attn_dict[layer]["pos_side"].max(-1) for layer in sorted_names]
+    #     print(f"Entropy diff: {np.array(entropy_diff).shape}, "
+    #          f"Entropy neg: {np.array(entropy_neg).shape}, "
+    #          f"Entropy pos: {np.array(entropy_pos).shape}")
 
-        print(f"Entropy diff: {np.array(entropy_diff).shape}, "
-             f"Entropy neg: {np.array(entropy_neg).shape}, "
-             f"Entropy pos: {np.array(entropy_pos).shape}")
+    #     vmin_diff, vmax_diff = np.array(entropy_diff).min(), np.array(entropy_diff).max()
+    #     vmin_neg, vmax_neg = np.array(entropy_neg).min(), np.array(entropy_neg).max()
+    #     vmin_pos, vmax_pos = np.array(entropy_pos).min(), np.array(entropy_pos).max()
+    #     # vmin_all = min(vmin_neg, vmin_pos, 0)
+    #     v_all = max(abs(vmax_neg), abs(vmax_pos), abs(vmin_neg), abs(vmin_pos))
+    #     v_diff = max(abs(vmin_diff), abs(vmax_diff))
 
-        vmin_diff, vmax_diff = np.array(entropy_diff).min(), np.array(entropy_diff).max()
-        vmin_neg, vmax_neg = np.array(entropy_neg).min(), np.array(entropy_neg).max()
-        vmin_pos, vmax_pos = np.array(entropy_pos).min(), np.array(entropy_pos).max()
-        # vmin_all = min(vmin_neg, vmin_pos, 0)
-        v_all = max(abs(vmax_neg), abs(vmax_pos), abs(vmin_neg), abs(vmin_pos))
-        v_diff = max(abs(vmin_diff), abs(vmax_diff))
+    #     plt.subplot(4, 4, iterator)
+    #     plt.title(f"{k} Distance (N, P), {model_name.split('/')[-1]}")
+    #     plt.xlabel("Head ID")
+    #     plt.ylabel("Layer ID")
+    #     plt.xticks(rotation=90)
+    #     plt.yticks(rotation=0)
+    #     plt.imshow(np.array(entropy_diff), aspect='auto', cmap='coolwarm', vmin=-v_diff, vmax=v_diff)
+    #     plt.colorbar(label=f'{k} distance')
 
-        plt.subplot(4, 4, iterator)
-        plt.title(f"{k} Distance (N, P), {model_name.split('/')[-1]}")
-        plt.xlabel("Head ID")
-        plt.ylabel("Layer ID")
-        plt.xticks(rotation=90)
-        plt.yticks(rotation=0)
-        plt.imshow(np.array(entropy_diff), aspect='auto', cmap='coolwarm', vmin=-v_diff, vmax=v_diff)
-        plt.colorbar(label=f'{k} distance')
+    #     plt.subplot(4, 4, iterator + 1)
+    #     plt.title(f"Difference N - P, {model_name.split('/')[-1]}")
+    #     plt.xlabel("Head ID")
+    #     plt.ylabel("Layer ID")
+    #     plt.xticks(rotation=90)
+    #     plt.yticks(rotation=0)
 
-        plt.subplot(4, 4, iterator + 1)
-        plt.title(f"Difference N - P, {model_name.split('/')[-1]}")
-        plt.xlabel("Head ID")
-        plt.ylabel("Layer ID")
-        plt.xticks(rotation=90)
-        plt.yticks(rotation=0)
+    #     diff = np.array(entropy_neg) - np.array(entropy_pos)
+    #     v_max = diff.max()
+    #     v_min = diff.min()
+    #     vdiff = max(abs(v_max), abs(v_min))
+    #     plt.imshow(diff, aspect='auto', cmap='coolwarm', vmin=-vdiff, vmax=vdiff)
+    #     plt.colorbar(label=k)
 
-        diff = np.array(entropy_neg) - np.array(entropy_pos)
-        v_max = diff.max()
-        v_min = diff.min()
-        vdiff = max(abs(v_max), abs(v_min))
-        plt.imshow(diff, aspect='auto', cmap='coolwarm', vmin=-vdiff, vmax=vdiff)
-        plt.colorbar(label=k)
+    #     plt.subplot(4, 4, iterator + 2)
+    #     plt.title(f"{v} Activation Negative Behavior")
+    #     plt.xlabel("Head ID")
+    #     plt.ylabel("Layer ID")
+    #     plt.xticks(rotation=90)
+    #     plt.yticks(rotation=0)
+    #     plt.imshow(np.array(entropy_neg), aspect='auto', cmap='coolwarm', vmin=-v_all, vmax=v_all)
+    #     plt.colorbar(label=k)
 
-        plt.subplot(4, 4, iterator + 2)
-        plt.title(f"{v} Activation Negative Behavior")
-        plt.xlabel("Head ID")
-        plt.ylabel("Layer ID")
-        plt.xticks(rotation=90)
-        plt.yticks(rotation=0)
-        plt.imshow(np.array(entropy_neg), aspect='auto', cmap='coolwarm', vmin=-v_all, vmax=v_all)
-        plt.colorbar(label=k)
+    #     plt.subplot(4, 4, iterator + 3)
+    #     plt.title(f"{v} Activation of Positive Behavior")
+    #     plt.xlabel("Head ID")
+    #     plt.ylabel("Layer ID")
+    #     plt.xticks(rotation=90)
+    #     plt.yticks(rotation=0)
+    #     plt.imshow(np.array(entropy_pos), aspect='auto', cmap='coolwarm', vmin=-v_all, vmax=v_all)
+    #     plt.colorbar(label=k)
 
-        plt.subplot(4, 4, iterator + 3)
-        plt.title(f"{v} Activation of Positive Behavior")
-        plt.xlabel("Head ID")
-        plt.ylabel("Layer ID")
-        plt.xticks(rotation=90)
-        plt.yticks(rotation=0)
-        plt.imshow(np.array(entropy_pos), aspect='auto', cmap='coolwarm', vmin=-v_all, vmax=v_all)
-        plt.colorbar(label=k)
+    #     iterator += 4
 
-        iterator += 4
-
-    plt.tight_layout()
-    plt.savefig(f"attention_{k}_distance_{v}.png")
+    # plt.tight_layout()
+    # plt.savefig(f"attention_{k}_distance_{v}.png")
     
 
-    plt.figure(figsize=(8,4))
-    for i, model in enumerate(models):
-        # print(len(entropy_all[i]),len(entropy_std[i]))
-        plt.plot(np.arange(len(entropy_all[i])), np.array(entropy_all[i]), label=model.split("/")[-1], marker='.')
-        plt.fill_between(np.arange(len(entropy_all[i])),
-                     np.array(entropy_all[i]) - np.array(entropy_std[i])/2,
-                     np.array(entropy_all[i]) + np.array(entropy_std[i])/2,
-                     alpha=0.2)
-    # m = max([len(entropy_all[i]) for i in range(len(entropy_all))])
-    # layers_ = np.arange(m)
-    # plt.xticks(layers_, rotation=90)
+    # plt.figure(figsize=(8,4))
+    # for i, model in enumerate(models):
+    #     # print(len(entropy_all[i]),len(entropy_std[i]))
+    #     plt.plot(np.arange(len(entropy_all[i])), np.array(entropy_all[i]), label=model.split("/")[-1], marker='.')
+    #     plt.fill_between(np.arange(len(entropy_all[i])),
+    #                  np.array(entropy_all[i]) - np.array(entropy_std[i])/2,
+    #                  np.array(entropy_all[i]) + np.array(entropy_std[i])/2,
+    #                  alpha=0.2)
+    # # m = max([len(entropy_all[i]) for i in range(len(entropy_all))])
+    # # layers_ = np.arange(m)
+    # # plt.xticks(layers_, rotation=90)
 
-    plt.title(f"{k} Attention Distance Across Models")
-    plt.xlabel("Layer")
-    plt.ylabel(f"Mean {k} Distance N-P")
+    # plt.title(f"{k} Attention Distance Across Models")
+    # plt.xlabel("Layer")
+    # plt.ylabel(f"Mean {k} Distance N-P")
 
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(f"{k}_distance_across_models.png")
+    # plt.legend()
+    # plt.tight_layout()
+    # plt.savefig(f"{k}_distance_across_models.png")
 
-    
+''' I have no idea whats bellow ahahahahhaha '''
 
 
     # k = "max" #, "sum_to_max", "sum_to_last", "sum", "max"

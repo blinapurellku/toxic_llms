@@ -24,7 +24,7 @@ from transformers import (AutoModelForCausalLM, AutoTokenizer,
                           BitsAndBytesConfig)
 from utils_evaluating_toxicity import classify_generation
 from utils_load_dataset_and_models import load_model_and_tokenizer, load_classifier, load_dataset, classify_models_dict
-from generate_responses import classify_generation, generate_responses
+from generate_responses import generate_responses
 # Optional: avoid error spam from Torch Dynamo
 torch._dynamo.config.suppress_errors = False
 
@@ -154,7 +154,8 @@ def main(args):
 
         bnb_config_2 = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16)
         cls_model, cls_tokenizer, cls_template, cls_name = load_classifier(args.dataset, device, bnb_config=bnb_config_2)
-        
+
+        cls_template = LLAMA_CLS_PROMPT #if cls_template is None else cls_template
         cls_results = classify_generation(
             filtered_prompts,
             filtered_responses,
@@ -192,6 +193,16 @@ def main(args):
 
 
 if __name__ == "__main__":
+    args = parse_args()
+    args.model = "Qwen/Qwen2.5-3B-Instruct" #"Qwen/Qwen2.5-3B"
+    args.dataset = "walledai/HarmBench"
+    args.cls_model = "cais/HarmBench-Mistral-7b-val-cl"
+    args.output_dir = "/data/erblina/Master_thesis"
+    main(args)
+
+
+
+
     # args = parse_args()
     # models = ["google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct", "allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct"] #"google/gemma-2-2b", "meta-llama/Llama-3.2-3B",
 
@@ -202,15 +213,15 @@ if __name__ == "__main__":
     #     args.model=model
     #     main(args)
 
-    args = parse_args()
-    args.dataset = "walledai/DTToxicity" #"toxigen/toxigen-data" # "walledai/HarmBench" # ""toxigen/toxigen-data"
-    args.cls_model = "tomh/toxigen_hatebert" # "Xuhui/ToxDect-roberta-large", "GroNLP/hateBERT", "tomh/toxigen_hatebert"
-    models = [ "meta-llama/Llama-3.2-3B-Instruct", "allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct"] #"google/gemma-2-2b", "meta-llama/Llama-3.2-3B",
-    # "google/gemma-2-2b-it",
+    # args = parse_args()
+    # args.dataset = "walledai/DTToxicity" #"toxigen/toxigen-data" # "walledai/HarmBench" # ""toxigen/toxigen-data"
+    # args.cls_model = "tomh/toxigen_hatebert" # "Xuhui/ToxDect-roberta-large", "GroNLP/hateBERT", "tomh/toxigen_hatebert"
+    # models = [ "meta-llama/Llama-3.2-3B-Instruct", "allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct"] #"google/gemma-2-2b", "meta-llama/Llama-3.2-3B",
+    # # "google/gemma-2-2b-it",
+    # # for model in models:
+    # # models = ["allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct"] #"allenai/OLMo-2-0425-1B"
+    # # models = ["QuixiAI/Wizard-Vicuna-7B-Uncensored"] # too big
     # for model in models:
-    # models = ["allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct"] #"allenai/OLMo-2-0425-1B"
-    # models = ["QuixiAI/Wizard-Vicuna-7B-Uncensored"] # too big
-    for model in models:
-        args.model=model
+    #     args.model=model
         
-        main(args)
+    #     main(args)

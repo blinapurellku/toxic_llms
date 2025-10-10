@@ -33,7 +33,7 @@ from transformers import (AutoModelForCausalLM, AutoTokenizer,
                           BitsAndBytesConfig)
 from utils_evaluating_toxicity import classify_generation
 from utils_load_dataset_and_models import load_model_and_tokenizer, load_classifier, load_dataset, classify_models_dict
-from generate_responses import classify_generation, generate_responses
+from generate_responses import generate_responses
 
 
 # Optional: avoid error spam from Torch Dynamo
@@ -62,7 +62,7 @@ def steering_vector_hook(
     Returns the hook handle so you can remove it later.
     """
     steer = steer.detach()
-    def _hook(_mod, _inp, out):
+    def _hook(_m, _inp, out):
         # Handle HF blocks that return tuples (hidden, present, …)
         tgt = out[0] if isinstance(out, tuple) else out  # (B, L, H)
 
@@ -104,47 +104,46 @@ def capture_all_layers(model,
     store, handles = defaultdict(list), []
 
     def _factory(name):
-        def _hook(_m, _inp, out):
+        def _hook(_m, inp, out):
             h = out[0] if isinstance(out, tuple) else out      # (B,L,H)
             h = h.detach().cpu()
-            # if move_to_cpu:
-            #     h = h.to("cpu", non_blocking=True)
             store[name].append(h.bfloat16())
             return out
         return _hook
+    
+    def _factory_atten(name):
+        def _hook_a(_m, inp, out):
+            # out: (B, L, H)
+            h = inp[0] if isinstance(inp, tuple) else inp      # (B,L,H)
+            h = h.detach().cpu()
+            store[name].append(h.bfloat16())
+            return out
+        return _hook_a
     
     if hasattr(model, "model") and hasattr(model.model, "layers"):
         n = len(model.model.layers)
         layers = [f"model.layers.{i}" for i in range(n)]
         if atten:
-            layers = [f"model.layers.{i}.self_attn" for i in range(n)]
-        print(f"Detected {n} layers: {layers}")
+            layers = [f"model.layers.{i}.self_attn.o_proj" for i in range(n)]
 
-    # 2) GPT‑style: <top>.transformer.h
     elif hasattr(model, "transformer") and hasattr(model.transformer, "h"):
         n = len(model.transformer.h)
         layers =  [f"transformer.h.{i}" for i in range(n)]
         if atten:
-            layers = [f"transformer.h.{i}.attn" for i in range(n)]
-        print(f"Detected {n} layers: {layers}")
+            layers = [f"transformer.h.{i}.attn.c_proj" for i in range(n)]
 
-    # 3) Fallback – numeric names
-    # else:
-    #     n = getattr(model.config, "num_hidden_layers", None)
-    #     if n is None:
-    #         raise ValueError("Could not determine transformer block count.")
-    #     layeres =  [f"layer_{i}" for i in range(n)]
+    else:
+        raise ValueError("Could not determine transformer block count.")
 
     print(f"Detected {len(layers)} layers: {layers}")
-    for n, m in model.named_modules():
-        if (n.startswith("model.layers.") and n in layers):   # old typo variant
-                  # GPT style
-            print(f"Registering hook for {n}")
-            handles.append(m.register_forward_hook(_factory(n)))
-        elif n.startswith("transformer.h.") and n in layers:
-            print(f"Registering hook for {n}")
-            handles.append(m.register_forward_hook(_factory(n)))
-
+    # Register hooks
+    for name, module in model.named_modules():
+        if name in layers:
+            print(f"Registering hook for {name}")
+            if atten:
+                handles.append(module.register_forward_hook(_factory_atten(name)))
+            else:
+                handles.append(module.register_forward_hook(_factory(name)))
 
     try:
         yield store

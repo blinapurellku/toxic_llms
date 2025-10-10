@@ -21,7 +21,7 @@ from accelerate.utils import find_executable_batch_size
 from datasets import load_dataset
 from safetensors.torch import load_file as load_safetensors
 from safetensors.torch import save_file as save_safetensors
-from templates import LLAMA_CLS_PROMPT, get_template
+from utils_templates import LLAMA_CLS_PROMPT, get_template
 from tqdm import tqdm
 from transformers import (AutoModelForCausalLM, AutoTokenizer,
                           BitsAndBytesConfig)
@@ -101,9 +101,7 @@ def main(args):
     for layer_name, h_state in hidden_states.items():  # h_state shape: (B, L, HD)
         # Mask hidden states
         print(h_state.shape, attention_mask.shape)
-        # token_counts = attention_mask.sum(dim=1).clamp(min=1)  # (B, 1), to prevent divide-by-zero
-        # token_counts = token_counts.unsqueeze(1)
-        # h_state = h_state.sum(dim=1) / token_counts  # (B, HD)
+       
 
         # Compute steering vectors
         hidden_toxic = h_state[labels == 1].mean(dim=0) 
@@ -111,8 +109,7 @@ def main(args):
         steering = hidden_toxic - hidden_nontoxic
         overall_mean = h_state.mean(dim=0)
         scale = overall_mean.norm() / (steering.norm() + 1e-6)
-        # normed_steering = steering * (overall_mean.norm() / (steering.norm() + 1e-6))
-        # normed_steering_ = -steering * (overall_mean.norm() / (-steering.norm() + 1e-6))
+       
         steering_vectors[layer_name] = {
             "toxic": steering,
             "nontoxic": -steering,
@@ -125,35 +122,6 @@ def main(args):
     print(f"Steering vectors saved to {os.path.join(save_path, 'steering_vectors.pt')}")
 
     
-    # layer_names = list(hidden_states.keys())
-    # mask = attention_mask == 1  # boolean mask
-    # steering_vectors = {}
-    # for layer_name in layer_names:
-    #     h_state = hidden_states[layer_name]
-    #     steering_vectors[layer_name] = {}
-    #     all_hidden = []
-    #     for i in range(len(hidden_states[layer_name])):
-    #         hidden = h_state[i][mask[i]]
-    #         hidden = torch.mean(hidden, dim=0)
-    #         all_hidden.append(hidden)
-    #     all_hidden = torch.stack(all_hidden, dim=0)
-    #     hidden_tocix = all_hidden[labels == 1].mean(dim=0)
-    #     hidden_nontoxic = all_hidden[labels == 0].mean(dim=0)
-    #     steering_toxic = hidden_tocix - hidden_nontoxic
-    #     steering_vectors[layer_name]["toxic"] = steering_toxic
-    #     steering_vectors[layer_name]["nontoxic"] = -steering_toxic
-    #     overall_mean = all_hidden.mean(dim=0)
-    #     steering_vectors[layer_name]["overall"] = overall_mean    
-
-    # save_path = os.path.join(args.output_dir, safe_model_name)
-    # save_safetensors(
-    #             steering_vectors,
-    #             os.path.join(save_path, f"steering_vectors.safetensors"),
-    #         )
-
-
-    
-    
     
 
 
@@ -165,7 +133,8 @@ if __name__ == "__main__":
     # models = ["google/gemma-2-2b-it", "google/gemma-2-2b", "meta-llama/Llama-3.2-3B", "meta-llama/Llama-3.2-3B-Instruct"]
 
     # for model in models:
-    models = ["allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct"] #"allenai/OLMo-2-0425-1B"
+    models = ["Qwen/Qwen2.5-3B-Instruct", "Qwen/Qwen2.5-3B"]
+        # "allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct"] #"allenai/OLMo-2-0425-1B"
     for model in models:
         args.model=model
         main(args)

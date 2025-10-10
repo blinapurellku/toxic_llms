@@ -26,7 +26,7 @@ from tqdm import tqdm
 from transformers import (AutoModelForCausalLM, AutoTokenizer,
                           BitsAndBytesConfig)
 from utils_load_dataset_and_models import load_model_and_tokenizer, load_classifier, load_dataset, classify_models_dict
-
+from utils_hooks import capture_all_layers
 # ────────────────────────────────────────────────────────── constants ──
 TORCH_DT = torch.bfloat16
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -54,110 +54,6 @@ bnb_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.
 
 
 
-def _derive_layer_names(model) -> List[str]:
-    """Return a list of *attribute paths* for each hidden‑state slot.
-
-    The list length == ``num_hidden_layers + 1`` (extra slot 0 for embeddings).
-
-    Examples
-    --------
-    * Llama‑family → ``[embeddings, 'model.model.layers.0', …]``
-    * GPT‑2/GPT‑J   → ``[embeddings, 'transformer.h.0', …]``
-
-    If the exact container list cannot be detected, we fall back to
-    `'layer_{i}'` so the code still runs.
-    """
-
-    # 1) Common decoder‑only HF models: <top>.model.layers (Llama, Gemma, …)
-    if hasattr(model, "model") and hasattr(model.model, "layers"):
-        n = len(model.model.layers)
-        return ["embeddings"] + [f"model.model.layers.{i}" for i in range(n)]
-
-    # 2) GPT‑style: <top>.transformer.h
-    if hasattr(model, "transformer") and hasattr(model.transformer, "h"):
-        n = len(model.transformer.h)
-        return ["embeddings"] + [f"transformer.h.{i}" for i in range(n)]
-
-    # 3) Fallback – numeric names
-    n = getattr(model.config, "num_hidden_layers", None)
-    if n is None:
-        raise ValueError("Could not determine transformer block count.")
-    return ["embeddings"] + [f"layer_{i}" for i in range(n)]
-
-
-
-@contextmanager
-def capture_all_layers(model,
-                       move_to_cpu: bool = True,
-                       pad_and_concat: bool = False,
-                       atten: bool = False):
-    """
-    Record post-block residual streams for *all* decoder layers.
-
-    Yields
-    ------
-    store : dict[str, list[Tensor] | Tensor]
-        While inside the `with`-block a list[Tensor] accumulates per layer.
-        On exit, lists are optionally left as-is (*pad_and_concat=False*)
-        or left-padded to the layer’s max sequence length and concatenated
-        into a single tensor (*pad_and_concat=True*).
-    """
-    store, handles = defaultdict(list), []
-
-    def _factory(name):
-        def _hook(_m, _inp, out):
-            h = out[0] if isinstance(out, tuple) else out      # (B,L,H)
-            h = h.detach().cpu()
-            # if move_to_cpu:
-            #     h = h.to("cpu", non_blocking=True)
-            store[name].append(h.bfloat16())
-            # print(store[name][-1].shape)
-            return out
-        return _hook
-    
-    if hasattr(model, "model") and hasattr(model.model, "layers"):
-        n = len(model.model.layers)
-        layers = [f"model.layers.{i}" for i in range(n)]
-        if atten:
-            layers = [f"model.layers.{i}.self_attn" for i in range(n)]
-        print(f"Detected {n} layers: {layers}")
-
-    # 2) GPT‑style: <top>.transformer.h
-    elif hasattr(model, "transformer") and hasattr(model.transformer, "h"):
-        n = len(model.transformer.h)
-        layers =  [f"transformer.h.{i}" for i in range(n)]
-        if atten:
-            layers = [f"transformer.h.{i}.attn" for i in range(n)]
-        print(f"Detected {n} layers: {layers}")
-
-    # 3) Fallback – numeric names
-    # else:
-    #     n = getattr(model.config, "num_hidden_layers", None)
-    #     if n is None:
-    #         raise ValueError("Could not determine transformer block count.")
-    #     layeres =  [f"layer_{i}" for i in range(n)]
-
-    print(f"Detected {len(layers)} layers: {layers}")
-    for n, m in model.named_modules():
-        if (n.startswith("model.layers.") and n in layers):   # old typo variant
-                  # GPT style
-            print(f"Registering hook for {n}")
-            handles.append(m.register_forward_hook(_factory(n)))
-        elif n.startswith("transformer.h.") and n in layers:
-            print(f"Registering hook for {n}")
-            handles.append(m.register_forward_hook(_factory(n)))
-
-    # for n, m in model.named_modules():
-    #     if n.startswith("model.model.layers.") or n.startswith("transformer.h."):
-    #         handles.append(m.register_forward_hook(_factory(n)))
-
-    try:
-        yield store
-    finally:
-        for h in handles:
-            h.remove()
-
-        
 
 @torch.no_grad()
 def run_prompting(
@@ -330,7 +226,7 @@ def main(args):
     cls_name = classify_models_dict[args.dataset] if args.dataset in classify_models_dict else None
 
 
-    model, tokenizer = load_model_and_tokenizer(args.model, device, bnb_config=args.bnb_config, output_hidden_states=False)
+    model, tokenizer = load_model_and_tokenizer(args.model, device, bnb_config=args.bnb_config)
     pad_token_id = tokenizer.pad_token_id  # Save this for later use
 
     template = None
@@ -357,7 +253,7 @@ def main(args):
         starting_batch_size=args.batch_size,
         atten=atten,
         aggregate=None, # "sum" or None (gets the last token)
-        tmp_dir=save_path,  # Temporary directory to store intermediate results
+        tmp_dir=None #save_path,  # Temporary directory to store intermediate results
     )
     # print(f"Generated {len(responses)} responses.")
     del model, tokenizer
@@ -410,11 +306,16 @@ def main(args):
 
 if __name__ == "__main__":
     args = parse_args()
-    # models = ["google/gemma-2-2b-it", "google/gemma-2-2b", "meta-llama/Llama-3.2-3B", "meta-llama/Llama-3.2-3B-Instruct"]
+    args.model = "Qwen/Qwen2.5-3B-Instruct" #"Qwen/Qwen2.5-3B"
+    args.dataset = "walledai/HarmBench"
+    args.cls_model = "cais/HarmBench-Mistral-7b-val-cl"
+    args.output_dir = "/data/erblina/Master_thesis"
+    main(args)
+    # # models = ["google/gemma-2-2b-it", "google/gemma-2-2b", "meta-llama/Llama-3.2-3B", "meta-llama/Llama-3.2-3B-Instruct"]
 
+    # # for model in models:
+    # models = ["allenai/OLMo-2-0425-1B"] #["allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct"] #"allenai/OLMo-2-0425-1B"
     # for model in models:
-    models = ["allenai/OLMo-2-0425-1B"] #["allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct"] #"allenai/OLMo-2-0425-1B"
-    for model in models:
-        args.model=model
-        main(args)
-    # main()
+    #     args.model=model
+    #     main(args)
+    # # main()

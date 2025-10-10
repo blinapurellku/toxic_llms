@@ -3,7 +3,7 @@ import os
 from traitlets import Bool
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, AutoModelForCausalLM
 import torch
-from datasets import load_dataset
+from datasets import load_dataset as hf_load_dataset
 import os
 
 import torch
@@ -118,17 +118,17 @@ def load_dataset(dataset_name, flag=None):
     if dataset_name not in datasets_dict:
         raise ValueError(f"Dataset {dataset_name} not recognized. Available datasets: {list(datasets_dict.keys())}")
     
-    split = datasets_dict[dataset_name][0]
+    spl = datasets_dict[dataset_name][0]
     get = datasets_dict[dataset_name][1]
     filter_dataset = datasets_dict[dataset_name][2]
 
     if flag is not None and dataset_name == 'walledai/DTToxicity':
-        split = flag
+        spl = flag
 
-    dataset = load_dataset(dataset_name, 
-                           split=split, 
-                           token=os.getenv("HUGGINGFACEHUB_API_TOKEN"), 
-                           cache_dir="/hf",
+    dataset = hf_load_dataset(dataset_name, 
+                           spl, 
+                        #    token=os.getenv("HUGGINGFACEHUB_API_TOKEN"), 
+                        #    cache_dir="/hf",
                            )
     if filter_dataset:
         dataset = dataset.filter(filter_dataset, batched=False)
@@ -153,6 +153,10 @@ def load_classifier(data_name, device, bnb_config: Optional[BitsAndBytesConfig] 
         raise ValueError(f"Classifier model {data_name} not recognized. Available models: {list(classify_models_dict.keys())}")
     
     cls_model = classify_models_dict[data_name]
+    tokenizer = AutoTokenizer.from_pretrained(
+            cls_model, padding_side="left", truncation_side="left", 
+            # token=os.getenv("HUGGINGFACEHUB_API_TOKEN"), cache_dir="/hf",
+        )
 
     if cls_model == 'cais/HarmBench-Mistral-7b-val-cls':
         bnb_config_1 = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16)
@@ -160,38 +164,33 @@ def load_classifier(data_name, device, bnb_config: Optional[BitsAndBytesConfig] 
             model = AutoModelForCausalLM.from_pretrained(
                 cls_model,
                 quantization_config=bnb_config_1,
-                dtype=torch.bfloat16, #if torch.cuda.is_available() else torch.float32,
+                torch_dtype=torch.bfloat16, #if torch.cuda.is_available() else torch.float32,
                 device_map=device,  # "auto",
-                token=os.getenv("HUGGINGFACEHUB_API_TOKEN"), 
-                cache_dir="/hf",
+                # token=os.getenv("HUGGINGFACEHUB_API_TOKEN"), 
+                # cache_dir="/hf",
                 ).eval()
         else:
             model = AutoModelForCausalLM.from_pretrained(
                 cls_model,
-                dtype=torch.bfloat16, #if torch.cuda.is_available() else torch.float32,
+                torch_dtype=torch.bfloat16, #if torch.cuda.is_available() else torch.float32,
                 device_map=device,  # "auto",
-                token=os.getenv("HUGGINGFACEHUB_API_TOKEN"), 
-                cache_dir="/hf",
+                # token=os.getenv("HUGGINGFACEHUB_API_TOKEN"), 
+                # cache_dir="/hf",
                 ).eval()
 
-        tokenizer = AutoTokenizer.from_pretrained(
-            cls_model, padding_side="left", truncation_side="left", token=os.getenv("HUGGINGFACEHUB_API_TOKEN"), cache_dir="/hf",
-        )
-
+        
         template = MISTRAL_CLS_PROMPT
 
     elif cls_model == 'allenai/truthfulqa-truth-judge-llama2-7B':
         model = AutoModelForCausalLM.from_pretrained(
             cls_model,
             # quantization_config=bnb_config_1,
-            dtype=torch.bfloat16, #if torch.cuda.is_available() else torch.float32,
+            torch_dtype=torch.bfloat16, #if torch.cuda.is_available() else torch.float32,
             device_map=device,  # "auto",
-            token=os.getenv("HUGGINGFACEHUB_API_TOKEN"), 
-            cache_dir="/hf",
+            # token=os.getenv("HUGGINGFACEHUB_API_TOKEN"), 
+            # cache_dir="/hf",
         ).eval()
-        tokenizer = AutoTokenizer.from_pretrained(
-            cls_model, padding_side="left", truncation_side="left", token=os.getenv("HUGGINGFACEHUB_API_TOKEN"), cache_dir="/hf",
-        )
+        
 
         template = 'Q:{question}\nA:{answer}\nTrue:'
 
@@ -200,13 +199,10 @@ def load_classifier(data_name, device, bnb_config: Optional[BitsAndBytesConfig] 
             cls_model,
            
             device_map=device,  # "auto",
-            token=os.getenv("HUGGINGFACEHUB_API_TOKEN"),
-            cache_dir="/hf",
+            # token=os.getenv("HUGGINGFACEHUB_API_TOKEN"),
+            # cache_dir="/hf",
         ).eval()
-        tokenizer = AutoTokenizer.from_pretrained(
-            cls_model, padding_side="left", truncation_side="left", #max_length=512,
-            token=os.getenv("HUGGINGFACEHUB_API_TOKEN"), cache_dir="/hf",
-        )
+        
         template = None
 
     elif cls_model == 'PKU-Alignment/beaver-dam-7b':
@@ -215,15 +211,12 @@ def load_classifier(data_name, device, bnb_config: Optional[BitsAndBytesConfig] 
         model = AutoModelForCausalLM.from_pretrained(
             cls_model,
             # quantization_config=bnb_config_1,
-            dtype=torch.bfloat16, #if torch.cuda.is_available() else torch.float32,
+            torch_dtype=torch.bfloat16, #if torch.cuda.is_available() else torch.float32,
             device_map=device,  # "auto",
-            token=os.getenv("HUGGINGFACEHUB_API_TOKEN"), 
-            cache_dir="/hf",
+            # token=os.getenv("HUGGINGFACEHUB_API_TOKEN"), 
+            # cache_dir="/hf",
             ).eval()
 
-        tokenizer = AutoTokenizer.from_pretrained(
-            cls_model, padding_side="left", truncation_side="left", token=os.getenv("HUGGINGFACEHUB_API_TOKEN"), cache_dir="/hf",
-        )
 
         template = BEAVER_TRAILS_PROMPT
 
@@ -242,24 +235,25 @@ def load_classifier(data_name, device, bnb_config: Optional[BitsAndBytesConfig] 
 def load_model_and_tokenizer(model_name, device, base_model: bool = False, bnb_config: Optional[BitsAndBytesConfig] = None):
     print(f"Loading model: {model_name}")
     tokenizer = AutoTokenizer.from_pretrained(
-        model_name, padding_side="left", truncation_side="left", token=os.getenv("HUGGINGFACEHUB_API_TOKEN"), cache_dir="/hf",
+        model_name, padding_side="left", truncation_side="left", 
+        # token=os.getenv("HUGGINGFACEHUB_API_TOKEN"), cache_dir="/hf",
     )
     if bnb_config is not None:
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
-            dtype=torch.bfloat16,
+            torch_dtype=torch.bfloat16,
             quantization_config=bnb_config,
             device_map=device, #"auto",
-            token=os.getenv("HUGGINGFACEHUB_API_TOKEN"),
-            cache_dir="/hf",
+            # token=os.getenv("HUGGINGFACEHUB_API_TOKEN"),
+            # cache_dir="/hf",
         ).eval()
     else:
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
-            dtype=torch.bfloat16,
+            torch_dtype=torch.bfloat16,
             device_map=device,  # "auto",
-            token=os.getenv("HUGGINGFACEHUB_API_TOKEN"),
-            cache_dir="/hf",
+            # token=os.getenv("HUGGINGFACEHUB_API_TOKEN"),
+            # cache_dir="/hf",
         ).eval()
 
     if tokenizer.pad_token is None:

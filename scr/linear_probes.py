@@ -21,6 +21,7 @@ from sklearn.linear_model import SGDClassifier
 from numpy.typing import NDArray
 from sklearn.utils import shuffle as sk_shuffle
 from sklearn.decomposition import PCA
+from scipy.stats import spearmanr, pearsonr
 
 
 # Optional: avoid error spam from Torch Dynamo
@@ -50,16 +51,31 @@ def pairwise_auc(dist: torch.Tensor, true_dist: torch.Tensor) -> float:
         auc: float
     """
     # flatten and move to cpu numpy
-    y_score = dist.numpy().ravel()
-    y_true = true_dist.numpy().ravel()
+    # y_score = dist.numpy().ravel()
+    # y_true = true_dist.numpy().ravel()
 
-    # remove diagonal (self-self pairs)
-    mask = ~np.eye(len(true_dist), dtype=bool).ravel()
-    y_score = y_score[mask]
-    y_true = y_true[mask]
-    ap  = average_precision_score(y_true, y_score)
+    # Use upper triangle (no diagonal, no double counting)
+    i, j = torch.triu_indices(dist.size(0), dist.size(1), offset=1)
+    y_score = dist[i, j].numpy()
+    y_true  = true_dist[i, j].numpy()
+
+    # Guard: need at least one positive and one negative
+    if y_true.min() == y_true.max():
+        return np.nan, np.nan
+
     auc = roc_auc_score(y_true, y_score)
+    ap  = average_precision_score(y_true, y_score)
     return auc, ap
+
+    # # remove diagonal (self-self pairs)
+    # mask = ~np.eye(len(true_dist), dtype=bool).ravel()
+    # y_score = y_score[mask]
+    # y_true = y_true[mask]
+    # ap  = average_precision_score(y_true, y_score)
+    # auc = roc_auc_score(y_true, y_score)
+    return auc, ap
+
+
 
 @dataclass
 class ProbeResult:
@@ -266,18 +282,18 @@ def main(args):
     safe_model_name = re.sub(r'[\\/*?:"<>|]', "_", args.model)
     save_path = os.path.join(args.output_dir, safe_model_name, "linear_probes")
     os.makedirs(save_path, exist_ok=True)
-    safe_data = re.sub(r'[\\/*?:"<>|]', "_", "walledai/HarmBench")
-    t = "_last_" # _sum_ or _ or _s_
+    safe_data = re.sub(r'[\\/*?:"<>|]', "_", "unalignment/toxic-dpo-v0.2") # "walledai/HarmBench"
+    t = "_sum_" # _sum_ or _ or _s_
     hidden_states_refusal = load_safetensors(
-        os.path.join(save_path, f"hidden_states_gen{t}refusal_{safe_data}.safetensors")
-        # os.path.join(save_path, f"hidden_states_gen{t}refusal.safetensors")
+        # os.path.join(save_path, f"hidden_states_gen{t}refusal_{safe_data}.safetensors")
+        os.path.join(save_path, f"hidden_states_gen{t}refusal.safetensors")
 
     )
     label_refusal = [0 for _ in range(len(hidden_states_refusal[list(hidden_states_refusal.keys())[0]]))]
 
     hidden_states_answer = load_safetensors(
-        os.path.join(save_path, f"hidden_states_gen{t}answer_{safe_data}.safetensors")
-        # os.path.join(save_path, f"hidden_states_gen{t}answer.safetensors")
+        # os.path.join(save_path, f"hidden_states_gen{t}answer_{safe_data}.safetensors")
+        os.path.join(save_path, f"hidden_states_gen{t}answer.safetensors")
 
     )
     label_answer = [1 for _ in range(len(hidden_states_answer[list(hidden_states_answer.keys())[0]]))]
@@ -342,6 +358,20 @@ def main(args):
         probes_report[layer_name]["pairwise_auc"] = auc
         probes_report[layer_name]["pairwise_ap"]  = ap
 
+        triu_idx = torch.triu_indices(dist.size(0), dist.size(1), offset=1)
+        dist_flat = dist[triu_idx[0], triu_idx[1]].cpu().numpy()
+        true_flat = true_dist[triu_idx[0], triu_idx[1]].cpu().numpy()
+
+        rho, pval = spearmanr(dist_flat, true_flat)
+        r, pval_pear = pearsonr(dist_flat, true_flat)
+
+
+        probes_report[layer_name]["spearman_rho"] = rho
+        probes_report[layer_name]["spearman_pval"] = pval
+        probes_report[layer_name]["pearson_r"] = r
+        probes_report[layer_name]["pearson_pval"] = pval_pear
+
+
         # for generalization
         h_X = hidden_states_all[layer_name]
         y_labels = np.asarray(y_labels, dtype=int).ravel()
@@ -377,6 +407,19 @@ def main(args):
         generalization_report[layer_name]["pairwise_auc"] = auc
         generalization_report[layer_name]["pairwise_ap"]  = ap
 
+        triu_idx = torch.triu_indices(dist.size(0), dist.size(1), offset=1)
+        dist_flat = dist[triu_idx[0], triu_idx[1]].cpu().numpy()
+        true_flat = true_dist[triu_idx[0], triu_idx[1]].cpu().numpy()
+
+        rho, pval = spearmanr(dist_flat, true_flat)
+        r, pval_pear = pearsonr(dist_flat, true_flat)
+
+
+        generalization_report[layer_name]["spearman_rho"] = rho
+        generalization_report[layer_name]["spearman_pval"] = pval
+        generalization_report[layer_name]["pearson_r"] = r
+        generalization_report[layer_name]["pearson_pval"] = pval_pear
+
 
     # optional: pretty print a summary
     for layer, mets in probes_report.items():
@@ -409,7 +452,7 @@ def main(args):
     ax.plot(layer_names, train_acc, marker='x', label="Train Acc")
     ax.plot(layer_names, test_acc,  marker='o', label="Test Acc")
     ax.plot(layer_names, gen_acc,   marker='^', label="Gen BalAcc")
-    ax.axhline(y=0.5, color='gray', linestyle='--', linewidth=1, label="Random Guess")
+    ax.axhline(y=0.5, color='gray', linestyle='--', linewidth=1)#, label="Random Guess")
     ax.set_title(f"Accuracy per Layer ({args.model})")
     ax.set_xlabel("Layer")
     ax.set_ylabel("Accuracy")
@@ -424,7 +467,7 @@ def main(args):
     ax.plot(layer_names, train_acc, marker='x', label="Train AUC")
     ax.plot(layer_names, test_acc,  marker='o', label="Test AUC")
     ax.plot(layer_names, gen_acc,   marker='^', label="Gen AUC")
-    ax.axhline(y=0.5, color='gray', linestyle='--', linewidth=1, label="Random Guess")
+    ax.axhline(y=0.5, color='gray', linestyle='--', linewidth=1)#, label="Random Guess")
     ax.set_title(f"AUC per Layer ({args.model})")
     ax.set_xlabel("Layer")
     ax.set_ylabel("AUC")
@@ -476,13 +519,75 @@ def main(args):
     ax.legend()
     ax.tick_params(axis='x', rotation=90)
 
+    # (1,4) Loss curves
+    aucs = [report["spearman_rho"] for report in probes_report.values()]
+    pvals  = [report["spearman_pval"] for report in probes_report.values()]
+    r_vals  = [report["pearson_r"] for report in probes_report.values()]
+    r_pvals = [report["pearson_pval"] for report in probes_report.values()]
+    g_aucs = [report["spearman_rho"] for report in generalization_report.values()]
+    g_pvals= [report["spearman_pval"] for report in generalization_report.values()]
+    g_r_vals  = [report["pearson_r"] for report in generalization_report.values()]
+    g_r_pvals = [report["pearson_pval"] for report in generalization_report.values()]
+
+    ax = axes[1, 1]
+    ax.plot(layer_names, aucs, marker='x', label="Spearman")
+    ax.plot(layer_names, r_vals,  marker='o', label="Pearson")
+    ax.plot(layer_names, g_aucs,   marker='^', label="Gen Spearman")
+    ax.plot(layer_names, g_r_vals,   marker='s', label="Gen Pearson")
+    # ax.axhline(y=0.5, color='gray', linestyle='--', linewidth=1)#, label="Random Guess")
+    # ax.plot(layer_names, g_aps,   marker='s', label="Gen AP")
+    # --- Add significance markers (e.g., * for p<0.05, ** for p<0.01)
+    for i, (x, y, p) in enumerate(zip(layer_names, aucs, pvals)):
+        # if p < 0.001:
+        #     symbol = "***"
+        # elif p < 0.01:
+        #     symbol = "**"
+        if p < 0.05:
+            symbol = "*"
+        else:
+            continue  # skip non-significant points
+        ax.text(i, y + 0.02, symbol, ha="center", va="bottom", fontsize=8, color="black")
+    
+    for i, (x, y, p) in enumerate(zip(layer_names, g_aucs, g_pvals)):
+        if p < 0.05:
+            symbol = "*"
+        else:
+            continue  # skip non-significant points
+        ax.text(i, y + 0.02, symbol, ha="center", va="bottom", fontsize=8, color="black")
+
+    for i, (x, y, p) in enumerate(zip(layer_names, r_vals, r_pvals)):
+        # if p < 0.001:
+        #     symbol = "***"
+        # elif p < 0.01:
+        #     symbol = "**"
+        if p < 0.05:
+            symbol = "*"
+        else:
+            continue  # skip non-significant points
+        ax.text(i, y + 0.02, symbol, ha="center", va="bottom", fontsize=8, color="black")
+
+    for i, (x, y, p) in enumerate(zip(layer_names, g_r_vals, g_r_pvals)):
+        if p < 0.05:
+            symbol = "*"
+        else:
+            continue  # skip non-significant points
+        ax.text(i, y + 0.02, symbol, ha="center", va="bottom", fontsize=8, color="black")
+
+
+    ax.set_title(f" Pairwise Correlations ({args.model}) ({t})")
+    ax.set_xlabel("Layer")
+    ax.set_ylabel("Correlation")
+    ax.legend()
+    ax.tick_params(axis='x', rotation=90)
+
     # (2,1..3) PCA scatter for 3 depth fractions
-    fractions = [1/3, 2/3, 3/3.5]   # ≈ 0.333, 0.667, 0.857
+    fractions = [1.8/3, 3/3.5]   # ≈ 0.333, 0.667, 0.857
     idxs = [min(len(layer_names)-1, max(0, int(round(f*(len(layer_names)-1))))) for f in fractions]
     pca_layers = [layer_names[i] for i in idxs]
+    print("PCA layers:", pca_layers)
     colors = np.where(labels == 1, "red", "blue")
     for j, layer in enumerate(pca_layers):
-        ax = axes[1, j+1]
+        ax = axes[1, j+2]
         X = torch.nn.functional.normalize(hidden_states[layer].float(), p=2, dim=1).numpy() 
         #hidden_states[layer].float()  # (B, HD)
         # L2-normalize rows to be safe for PCA viz (optional but nice)

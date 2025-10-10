@@ -23,7 +23,8 @@ import torch.nn.functional as F
 from accelerate.utils import find_executable_batch_size
 from datasets import load_dataset
 from safetensors.torch import save_file as save_safetensors
-from templates import LLAMA_CLS_PROMPT, get_template
+from utils_templates import LLAMA_CLS_PROMPT, get_template
+from utils_hooks import capture_all_layers
 from tqdm import tqdm
 from transformers import (AutoModelForCausalLM, AutoTokenizer,
                           BitsAndBytesConfig)
@@ -119,74 +120,6 @@ def load_model_and_tokenizer(
     # model.config.output_hidden_states = output_hidden_states  # Enable hidden states output
     return model, tokenizer
 
-
-
-@contextmanager
-def capture_all_layers(model,
-                       move_to_cpu: bool = True,
-                       pad_and_concat: bool = False,
-                       atten: bool = False):
-    """
-    Record post-block residual streams for *all* decoder layers.
-
-    Yields
-    ------
-    store : dict[str, list[Tensor] | Tensor]
-        While inside the `with`-block a list[Tensor] accumulates per layer.
-        On exit, lists are optionally left as-is (*pad_and_concat=False*)
-        or left-padded to the layer’s max sequence length and concatenated
-        into a single tensor (*pad_and_concat=True*).
-    """
-    store, handles = defaultdict(list), []
-
-    def _factory(name):
-        def _hook(_m, _inp, out):
-            h = out[0] if isinstance(out, tuple) else out      # (B,L,H)
-            h = h.detach().cpu()
-            # if move_to_cpu:
-            #     h = h.to("cpu", non_blocking=True)
-            store[name].append(h.bfloat16())
-            return out
-        return _hook
-    
-    if hasattr(model, "model") and hasattr(model.model, "layers"):
-        n = len(model.model.layers)
-        layers = [f"model.layers.{i}" for i in range(n)]
-        if atten:
-            layers = [f"model.layers.{i}.self_attn" for i in range(n)]
-        print(f"Detected {n} layers: {layers}")
-
-    # 2) GPT‑style: <top>.transformer.h
-    elif hasattr(model, "transformer") and hasattr(model.transformer, "h"):
-        n = len(model.transformer.h)
-        layers =  [f"transformer.h.{i}" for i in range(n)]
-        if atten:
-            layers = [f"transformer.h.{i}.attn" for i in range(n)]
-        print(f"Detected {n} layers: {layers}")
-
-    # 3) Fallback – numeric names
-    # else:
-    #     n = getattr(model.config, "num_hidden_layers", None)
-    #     if n is None:
-    #         raise ValueError("Could not determine transformer block count.")
-    #     layeres =  [f"layer_{i}" for i in range(n)]
-
-    print(f"Detected {len(layers)} layers: {layers}")
-    for n, m in model.named_modules():
-        if (n.startswith("model.layers.") and n in layers):   # old typo variant
-                  # GPT style
-            print(f"Registering hook for {n}")
-            handles.append(m.register_forward_hook(_factory(n)))
-        elif n.startswith("transformer.h.") and n in layers:
-            print(f"Registering hook for {n}")
-            handles.append(m.register_forward_hook(_factory(n)))
-
-
-    try:
-        yield store
-    finally:
-        for h in handles:
-            h.remove()
 
 
         

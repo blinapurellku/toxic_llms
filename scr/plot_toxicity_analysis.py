@@ -25,7 +25,6 @@ import pandas as pd
 from accelerate.utils import find_executable_batch_size
 from datasets import load_dataset
 from safetensors.torch import save_file as save_safetensors
-from templates import LLAMA_CLS_PROMPT, get_template, MISTRAL_CLS_PROMPT
 from tqdm import tqdm
 from transformers import (AutoModelForCausalLM, AutoTokenizer,
                           BitsAndBytesConfig)
@@ -48,157 +47,350 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 # BitsAndBytesConfig for 8-bit quantization
 # bnb_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16)
+import numpy as np
+import matplotlib.pyplot as plt
+from textwrap import wrap
 
-def plot_steering_results(layers, res_harmbench, res_d, ds1_name, ds2_name, safe_model_name):
+def plot_steering_results(
+    layers,
+    res_harmbench,
+    res_d,
+    ds1_name,
+    ds2_names,               # <— renamed from ds2_name to reflect it's a list
+    safe_model_name,
+    *,
+    bar_width=0.12,
+    group_gap=0.85,
+    show_values=True,
+    ylim=(0, 1.0),
+    dpi=300,
+    savepath=None
+):
     """
-    Generates a figure with subplots for each layer, showing grouped
-    bar charts for the two datasets and three alpha steering values.
+    Plot grouped bar charts for multiple layers showing three steering settings
+    (base, neg, pos) across HarmBench + N additional datasets.
+
+    Parameters
+    ----------
+    layers : list
+    res_harmbench : dict[layer] -> dict[alpha] -> float
+        e.g. res_harmbench[7] = {0.0: 0.32, '-1.5': 0.18, '0.07': 0.24}
+    res_d : dict[dataset_name] -> dict[layer] -> dict[alpha] -> float
+    ds1_name : str                      # Label for HarmBench (leftmost group)
+    ds2_names : list[str]               # Labels for other datasets (right groups)
+    safe_model_name : str
+    bar_width : float                   # Width of individual bars
+    group_gap : float                   # Gap between dataset groups on x-axis
+    show_values : bool                  # Show numeric annotations above bars
+    ylim : tuple(float, float)          # Y-axis limits
+    dpi : int
+    savepath : str|None                 # If None, builds a file name automatically
     """
+
     n_layers = len(layers)
+    n_groups = 1 + len(ds2_names)       # HarmBench + others
+    conditions = ["base", "neg", "pos"]
 
-    # Setup figure and subplots
-    # We use sharey=True so all subplots have the same Y-axis scale (0 to 1)
-    fig, axes = plt.subplots(1, n_layers, figsize=(4 * n_layers, 5), sharey=True)
-    
-    # Handle the case of a single layer/subplot
-    if n_layers == 1:
-        axes = [axes] 
-
-    # Plot parameters
-    bar_width = 0.10
-    group_padding = 0.8 # Space between the two dataset groups
-    
-    # Define the base X-positions for the two dataset groups
-    # Group 1 (Dataset 1) is centered around 0.
-    # Group 2 (Dataset 2) is centered around 1 + padding.
-    ds_x_positions = np.array([0] + [(i + 1) * group_padding for i in range(len(ds2_name))])
-
-    # Colors and Labels for the three alpha conditions
+    # --- Colors & labels ---
     colors = {
-        'base': '#3498db', # Blue for base (alpha=0)
-        'neg': '#2ecc71',  # Green for negative alpha (Mitigating)
-        'pos': '#e74c3c'   # Red for positive alpha (Amplifying)
+        "base": "#2F80ED",  # blue
+        "neg" : "#27AE60",  # green
+        "pos" : "#EB5757",  # red
     }
-    
-    labels = {
-        'base': r'$\alpha = 0$ (Base)',
-        'neg': r'$\alpha_{neg}$ (Mitigating)',
-        'pos': r'$\alpha_{pos}$ (Amplifying)'
+    legend_labels = {
+        "base": r"$\alpha = 0$ (Base)",
+        "neg" : r"$\alpha_{neg}$ (Mitigating)",
+        "pos" : r"$\alpha_{pos}$ (Amplifying)",
     }
 
-    for i, layer in enumerate(layers):
-        ax = axes[i]
-        layer_data_h = res_harmbench[layer]
-        
+    # Figure
+    fig, axes = plt.subplots(
+        1, n_layers, figsize=(min(5 * n_layers, 20), 5.0),
+        sharey=True, constrained_layout=True
+    )
+    if n_layers == 1:
+        axes = [axes]
 
-        # Get the current alpha values (as strings)
-        # alpha_n_str = str(layer_data_h['alpha_n_val'])
-        # alpha_p_str = str(layer_data_h['alpha_p_val'])
-        alpha_n_str = list(res_harmbench[layer].keys())[1]
-        alpha_p_str = list(res_harmbench[layer].keys())[0]
-        
-        # --- Data Extraction ---
-        # Dataset 1 (HarmBench) values
-        h_base = layer_data_h[0.0]
-        h_neg = layer_data_h[alpha_n_str]
-        h_pos = layer_data_h[alpha_p_str]
-        
-         # 1. Dataset 1 Group (e.g., HarmBench)
-        x_h_center = ds_x_positions[0]
+    # Utility: convert alpha keys robustly to floats, keep original for title
+    def _alpha_keys(layer_dict):
+        # layer_dict like {0.0: v, '-1.5': v, '0.07': v} (mixed keys possible)
+        keys = list(layer_dict.keys())
+        # strip out the base 0.0 regardless of string/float
+        def as_float(x):
+            try:   return float(x)
+            except: return np.nan
+        nonbase = [k for k in keys if not (isinstance(k, (int, float)) and k == 0.0) and not (isinstance(k, str) and k.strip() in {"0", "0.0"})]
+        # choose negatives and positives; fall back to min/max if signs missing
+        floats = np.array([as_float(k) for k in nonbase], dtype=float)
+        if len(floats) == 0:
+            return 0.0, None, None, "0", "?", "?"
+        neg_val = floats[np.argmin(floats)] if np.any(floats < 0) else floats.min()
+        pos_val = floats[np.argmax(floats)] if np.any(floats > 0) else floats.max()
+        # find original-string representations to index dicts safely
+        def original_key_for(val):
+            for k in keys:
+                try:
+                    if abs(float(k) - float(val)) < 1e-9:
+                        return k
+                except:
+                    pass
+            return val  # best-effort
+        neg_key = original_key_for(neg_val)
+        pos_key = original_key_for(pos_val)
+        return 0.0, neg_key, pos_key, "0.0", str(neg_key), str(pos_key)
+
+    # common x positions: centers of dataset groups
+    x_group_centers = np.arange(n_groups) * group_gap
+
+    # fixed offsets for the three bars in each group (left, center, right)
+    offsets = {
+        "base": -bar_width,
+        "neg" : 0.0,
+        "pos" : +bar_width
+    }
+
+    def _short_name(name):
+        return re.split(r'[\\/]', name)[-1]
     
-        # Base (alpha=0): Left bar in the group
-        ax.bar(x_h_center - bar_width, h_base, bar_width, color=colors['base'], label=labels['base'])
-        # Negative alpha: Center bar in the group
-        ax.bar(x_h_center, h_neg, bar_width, color=colors['neg'], label=labels['neg'])
-        # Positive alpha: Right bar in the group
-        ax.bar(x_h_center + bar_width, h_pos, bar_width, color=colors['pos'], label=labels['pos'])
+    # plotting
+    for ax, layer in zip(axes, layers):
+        # Determine alpha keys for this layer from HarmBench dict
+        base_key, neg_key, pos_key, base_str, neg_str, pos_str = _alpha_keys(res_harmbench[layer])
 
-        # Helper function to add numeric labels on top of bars
-        def add_value_labels(x_centers, y_values, ax):
-            for val_x, val_y in zip(x_centers, y_values):
-                # Format to 2 decimal places and place slightly above the bar
-                ax.text(val_x, val_y + 0.015, f'{val_y:.2f}', ha='center', va='bottom', fontsize=6, weight='bold')
+        # Collect data in order: [HB, *others]
+        group_labels = [ds1_name] + list(ds2_names)
 
-        # Add labels for Dataset 1
-        x_positions_h = [x_h_center - bar_width, x_h_center, x_h_center + bar_width]
-        y_positions_h = [h_base, h_neg, h_pos]
-        add_value_labels(x_positions_h, y_positions_h, ax)
-        
-        for data in ds2_name:
-            layer_data_d = res_d[data][layer]
-            # Dataset 2 (SafeDataset) values
-            d_base = layer_data_d[0.0]
-            d_neg = layer_data_d[alpha_n_str]
-            d_pos = layer_data_d[alpha_p_str]
-            
-            # --- Plotting Grouped Bars ---
-            for i, data in enumerate(ds2_name):
-                layer_data_d = res_d[data][layer]
-                # Dataset 2 (SafeDataset) values
-                d_base = layer_data_d[0.0]
-                d_neg = layer_data_d[alpha_n_str]
-                d_pos = layer_data_d[alpha_p_str]
-                # 2. Dataset 2 Group (e.g., SafeDataset)
-                x_d_center = ds_x_positions[i+1]
-                
-                # Base (alpha=0)
-                ax.bar(x_d_center - bar_width, d_base, bar_width, color=colors['base'])
-                # Negative alpha
-                ax.bar(x_d_center, d_neg, bar_width, color=colors['neg'])
-                # Positive alpha
-                ax.bar(x_d_center + bar_width, d_pos, bar_width, color=colors['pos'])
-            
-                # Add labels for Dataset 2
-                x_positions_d = [x_d_center - bar_width, x_d_center, x_d_center + bar_width]
-                y_positions_d = [d_base, d_neg, d_pos]
-                add_value_labels(x_positions_d, y_positions_d, ax)
-            
-        # --- Styling and Labels ---
-        
-        # X-axis ticks and labels (centered under the groups)
-        ax.set_xticks(ds_x_positions)
-        ax.set_xticklabels([ds1_name]+ds2_name, rotation=90, fontsize=8)
+        group_labels = [_short_name(ds1_name)] + [_short_name(ds) for ds in ds2_names]
 
-        # Subplot Title: Layer and specific alpha values
+        # Build values per condition
+        vals = {c: [] for c in conditions}
+
+        # HarmBench first
+        hdict = res_harmbench[layer]
+        vals["base"].append(hdict[base_key if base_key in hdict else 0.0])
+        vals["neg"].append(hdict[neg_key])
+        vals["pos"].append(hdict[pos_key])
+
+        # Other datasets
+        for ds in ds2_names:
+            ddict = res_d[ds][layer]
+            vals["base"].append(ddict[base_key if base_key in ddict else 0.0])
+            vals["neg"].append(ddict[neg_key])
+            vals["pos"].append(ddict[pos_key])
+
+        # Draw bars
+        for j, cond in enumerate(conditions):
+            xs = x_group_centers + offsets[cond]
+            bars = ax.bar(xs, vals[cond], width=bar_width, color=colors[cond],
+                          label=legend_labels[cond] if layer == layers[0] else None,
+                          edgecolor="white", linewidth=0.6)
+            # Value labels
+            if show_values:
+                for b in bars:
+                    h = b.get_height()
+                    if np.isnan(h):
+                        continue
+                    ax.text(
+                        b.get_x() + b.get_width()/2, h + 0.012,
+                        f"{h:.2f}",
+                        ha="center", va="bottom", fontsize=6, rotation=0
+                    )
+
+        # Style & titles
+        ax.set_ylim(*ylim)
+        ax.set_xticks(x_group_centers)
+        # wrap labels a bit in case they’re long
+        ax.set_xticklabels([ "\n".join(wrap(lbl, 14)) for lbl in group_labels ], rotation=45, fontsize=9)
+        ax.grid(axis="y", linestyle="--", alpha=0.35, linewidth=0.7)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.spines["left"].set_alpha(0.4)
+        ax.spines["bottom"].set_alpha(0.4)
+        ax.tick_params(axis="x", length=0)
+
+        # Per-layer title shows the actual alpha values used
         ax.set_title(
-            f"Layer {layer}\n($\\alpha_{{neg}}={alpha_n_str}$, $\\alpha_{{pos}}={alpha_p_str}$)", 
+            f"Layer {layer}\n($\\alpha_{{neg}}={neg_str}$, $\\alpha_{{pos}}={pos_str}$)",
             fontsize=12
         )
 
-        # Y-axis label (only for the first subplot)
-        if i == 0:
-            ax.set_ylabel("Average Toxicity Score", fontsize=12)
-        
-        # Set Y-axis limits (0 to 1 for toxicity scores)
-        ax.set_ylim(0, 1.0)
-        ax.grid(axis='y', linestyle='--', alpha=0.6)
-        
-        
-        
-        
-        
-        # Hide internal ticks
-        ax.tick_params(axis='x', which='both', length=0)
+    axes[0].set_ylabel("Average Toxicity Score", fontsize=12)
 
-    plt.suptitle(f"Steering Toxicity Analysis for {safe_model_name.replace('_', '-')}")
-    # Centralized Legend (grab handles/labels from the first subplot)
-    handles, labels_list = axes[0].get_legend_handles_labels()
-    fig.legend(
-        handles, 
-        labels_list, 
-        # loc='upper left', 
-        ncol=1, 
-        bbox_to_anchor=(1.12, 0.88), #(0.5, 1.05), # Position legend above the main plot area
-        frameon=False, 
-        fontsize=11
+    # Shared super-title
+    fig.suptitle(
+        f"Steering Toxicity Analysis for {safe_model_name.replace('_','-')}",
+        fontsize=14, y=1.02
     )
 
-    # Adjust layout to make room for the centralized legend
-    plt.tight_layout()#rect=[0, 0, 1, 0.95]) 
-    # fig.tight_layout(rect=[0, 0, 1, 0.92]) 
+    # One legend for all
+    handles, labels = axes[0].get_legend_handles_labels()
+    if handles:
+        fig.legend(handles, labels, loc="upper left", bbox_to_anchor=(1.005, 1.0),
+                   frameon=False, fontsize=11)
+
+    # Save then show
+    if savepath is None:
+        # if os.path.exists(f"/home/fe/purelku/Desktop/Master_thesis/results_steering_datasets/{safe_model_name}"):
+        os.makedirs(f"/home/fe/purelku/Desktop/Master_thesis/results_steering_datasets/{safe_model_name}", exist_ok=True)
+
+        savepath = f"/home/fe/purelku/Desktop/Master_thesis/results_steering_datasets/{safe_model_name}/steering_toxicity_{safe_model_name}_datasets"
+        
+    fig.savefig(f"{savepath}.png", dpi=dpi, bbox_inches="tight")
+    fig.savefig(f"{savepath}.svg", format="svg", bbox_inches="tight", dpi=dpi)
+
     plt.show()
-    plt.savefig(f"steering_toxicity_{safe_model_name}_datasets.png", dpi=300, bbox_inches='tight')
-    plt.close()
+    plt.close(fig)
+
+# def plot_steering_results(layers, res_harmbench, res_d, ds1_name, ds2_name, safe_model_name):
+#     """
+#     Generates a figure with subplots for each layer, showing grouped
+#     bar charts for the two datasets and three alpha steering values.
+#     """
+#     n_layers = len(layers)
+
+#     # Setup figure and subplots
+#     # We use sharey=True so all subplots have the same Y-axis scale (0 to 1)
+#     fig, axes = plt.subplots(1, n_layers, figsize=(4 * n_layers, 5), sharey=True)
+    
+#     # Handle the case of a single layer/subplot
+#     if n_layers == 1:
+#         axes = [axes] 
+
+#     # Plot parameters
+#     bar_width = 0.10
+#     group_padding = 0.8 # Space between the two dataset groups
+    
+#     # Define the base X-positions for the two dataset groups
+#     # Group 1 (Dataset 1) is centered around 0.
+#     # Group 2 (Dataset 2) is centered around 1 + padding.
+#     ds_x_positions = np.array([0] + [(i + 1) * group_padding for i in range(len(ds2_name))])
+
+#     # Colors and Labels for the three alpha conditions
+#     colors = {
+#         'base': '#3498db', # Blue for base (alpha=0)
+#         'neg': '#2ecc71',  # Green for negative alpha (Mitigating)
+#         'pos': '#e74c3c'   # Red for positive alpha (Amplifying)
+#     }
+    
+#     labels = {
+#         'base': r'$\alpha = 0$ (Base)',
+#         'neg': r'$\alpha_{neg}$ (Mitigating)',
+#         'pos': r'$\alpha_{pos}$ (Amplifying)'
+#     }
+
+#     for i, layer in enumerate(layers):
+#         ax = axes[i]
+#         layer_data_h = res_harmbench[layer]
+        
+
+#         # Get the current alpha values (as strings)
+#         # alpha_n_str = str(layer_data_h['alpha_n_val'])
+#         # alpha_p_str = str(layer_data_h['alpha_p_val'])
+#         alpha_n_str = list(res_harmbench[layer].keys())[1]
+#         alpha_p_str = list(res_harmbench[layer].keys())[0]
+        
+#         # --- Data Extraction ---
+#         # Dataset 1 (HarmBench) values
+#         h_base = layer_data_h[0.0]
+#         h_neg = layer_data_h[alpha_n_str]
+#         h_pos = layer_data_h[alpha_p_str]
+        
+#          # 1. Dataset 1 Group (e.g., HarmBench)
+#         x_h_center = ds_x_positions[0]
+    
+#         # Base (alpha=0): Left bar in the group
+#         ax.bar(x_h_center - bar_width, h_base, bar_width, color=colors['base'], label=labels['base'])
+#         # Negative alpha: Center bar in the group
+#         ax.bar(x_h_center, h_neg, bar_width, color=colors['neg'], label=labels['neg'])
+#         # Positive alpha: Right bar in the group
+#         ax.bar(x_h_center + bar_width, h_pos, bar_width, color=colors['pos'], label=labels['pos'])
+
+#         # Helper function to add numeric labels on top of bars
+#         def add_value_labels(x_centers, y_values, ax):
+#             for val_x, val_y in zip(x_centers, y_values):
+#                 # Format to 2 decimal places and place slightly above the bar
+#                 ax.text(val_x, val_y + 0.015, f'{val_y:.2f}', ha='center', va='bottom', fontsize=6, weight='bold')
+
+#         # Add labels for Dataset 1
+#         x_positions_h = [x_h_center - bar_width, x_h_center, x_h_center + bar_width]
+#         y_positions_h = [h_base, h_neg, h_pos]
+#         add_value_labels(x_positions_h, y_positions_h, ax)
+        
+#         for data in ds2_name:
+#             layer_data_d = res_d[data][layer]
+#             # Dataset 2 (SafeDataset) values
+#             d_base = layer_data_d[0.0]
+#             d_neg = layer_data_d[alpha_n_str]
+#             d_pos = layer_data_d[alpha_p_str]
+            
+#             # --- Plotting Grouped Bars ---
+#             for i, data in enumerate(ds2_name):
+#                 layer_data_d = res_d[data][layer]
+#                 # Dataset 2 (SafeDataset) values
+#                 d_base = layer_data_d[0.0]
+#                 d_neg = layer_data_d[alpha_n_str]
+#                 d_pos = layer_data_d[alpha_p_str]
+#                 # 2. Dataset 2 Group (e.g., SafeDataset)
+#                 x_d_center = ds_x_positions[i+1]
+                
+#                 # Base (alpha=0)
+#                 ax.bar(x_d_center - bar_width, d_base, bar_width, color=colors['base'])
+#                 # Negative alpha
+#                 ax.bar(x_d_center, d_neg, bar_width, color=colors['neg'])
+#                 # Positive alpha
+#                 ax.bar(x_d_center + bar_width, d_pos, bar_width, color=colors['pos'])
+            
+#                 # Add labels for Dataset 2
+#                 x_positions_d = [x_d_center - bar_width, x_d_center, x_d_center + bar_width]
+#                 y_positions_d = [d_base, d_neg, d_pos]
+#                 add_value_labels(x_positions_d, y_positions_d, ax)
+            
+#         # --- Styling and Labels ---
+        
+#         # X-axis ticks and labels (centered under the groups)
+#         ax.set_xticks(ds_x_positions)
+#         ax.set_xticklabels([ds1_name]+ds2_name, rotation=90, fontsize=8)
+
+#         # Subplot Title: Layer and specific alpha values
+#         ax.set_title(
+#             f"Layer {layer}\n($\\alpha_{{neg}}={alpha_n_str}$, $\\alpha_{{pos}}={alpha_p_str}$)", 
+#             fontsize=12
+#         )
+
+#         # Y-axis label (only for the first subplot)
+#         if i == 0:
+#             ax.set_ylabel("Average Toxicity Score", fontsize=12)
+        
+#         # Set Y-axis limits (0 to 1 for toxicity scores)
+#         ax.set_ylim(0, 1.0)
+#         ax.grid(axis='y', linestyle='--', alpha=0.6)
+        
+        
+        
+        
+        
+#         # Hide internal ticks
+#         ax.tick_params(axis='x', which='both', length=0)
+
+#     plt.suptitle(f"Steering Toxicity Analysis for {safe_model_name.replace('_', '-')}")
+#     # Centralized Legend (grab handles/labels from the first subplot)
+#     handles, labels_list = axes[0].get_legend_handles_labels()
+#     fig.legend(
+#         handles, 
+#         labels_list, 
+#         # loc='upper left', 
+#         ncol=1, 
+#         bbox_to_anchor=(1.12, 0.88), #(0.5, 1.05), # Position legend above the main plot area
+#         frameon=False, 
+#         fontsize=11
+#     )
+
+#     # Adjust layout to make room for the centralized legend
+#     plt.tight_layout()#rect=[0, 0, 1, 0.95]) 
+#     # fig.tight_layout(rect=[0, 0, 1, 0.92]) 
+#     plt.show()
+#     plt.savefig(f"steering_toxicity_{safe_model_name}_datasets.png", dpi=300, bbox_inches='tight')
+#     plt.close()
 
 
 def parse_args():
@@ -368,6 +560,6 @@ if __name__ == "__main__":
     for _, model in enumerate(["google/gemma-2-2b", "meta-llama/Llama-3.2-3B", "allenai/OLMo-2-0425-1B", "google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct", "allenai/OLMo-2-0425-1B-Instruct"]): #"google/gemma-2-2b-it", , "allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO"
         
         args.model = model
-        args.dataset = ["walledai/AdvBench", "walledai/DTStereotype", "walledai/CatHarmfulQA","walledai/DTToxicity","walledai/DTToxicity_gpt4","truthfulqa/truthful_qa"]
+        args.dataset = ["walledai/AdvBench", "walledai/DTStereotype", "walledai/CatHarmfulQA","walledai/DTToxicity","truthfulqa/truthful_qa"]
         main(args)
     # "google/gemma-2-2b", "meta-llama/Llama-3.2-3B", "allenai/OLMo-2-0425-1B" "LibrAI/do-not-answer"-this doesn't work

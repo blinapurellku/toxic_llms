@@ -3,6 +3,8 @@ import os
 import re
 
 import zstandard as zstd
+from typing import Dict, List, Optional, Tuple, Union
+
 
 
 def safe_name(s: str) -> str:
@@ -81,3 +83,40 @@ def load_lists(path: str):
     responses = obj["r"]
     labels = obj.get("y", None)
     return prompts, responses, labels
+
+
+
+
+
+
+''' the one below doesn't belong here but whatever '''
+
+def _derive_layer_names(model) -> List[str]:
+    """Return a list of *attribute paths* for each hidden‑state slot.
+
+    The list length == ``num_hidden_layers + 1`` (extra slot 0 for embeddings).
+
+    Examples
+    --------
+    * Llama‑family → ``[embeddings, 'model.model.layers.0', …]``
+    * GPT‑2/GPT‑J   → ``[embeddings, 'transformer.h.0', …]``
+
+    If the exact container list cannot be detected, we fall back to
+    `'layer_{i}'` so the code still runs.
+    """
+
+    # 1) Common decoder‑only HF models: <top>.model.layers (Llama, Gemma, …)
+    if hasattr(model, "model") and hasattr(model.model, "layers"):
+        n = len(model.model.layers)
+        return ["embeddings"] + [f"model.model.layers.{i}" for i in range(n)]
+
+    # 2) GPT‑style: <top>.transformer.h
+    if hasattr(model, "transformer") and hasattr(model.transformer, "h"):
+        n = len(model.transformer.h)
+        return ["embeddings"] + [f"transformer.h.{i}" for i in range(n)]
+
+    # 3) Fallback – numeric names
+    n = getattr(model.config, "num_hidden_layers", None)
+    if n is None:
+        raise ValueError("Could not determine transformer block count.")
+    return ["embeddings"] + [f"layer_{i}" for i in range(n)]
