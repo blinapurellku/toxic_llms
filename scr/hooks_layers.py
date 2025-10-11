@@ -27,6 +27,7 @@ from transformers import (AutoModelForCausalLM, AutoTokenizer,
                           BitsAndBytesConfig)
 from utils_load_dataset_and_models import load_model_and_tokenizer, load_classifier, load_dataset, classify_models_dict
 from utils_hooks import capture_all_layers
+from generate_responses import run_prompting
 # ────────────────────────────────────────────────────────── constants ──
 TORCH_DT = torch.bfloat16
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -55,124 +56,6 @@ bnb_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.
 
 
 
-@torch.no_grad()
-def run_prompting(
-    model,
-    tokenizer,
-    prompts,
-    base_model: bool = False,
-    template: dict | None = None,
-    starting_batch_size: int = 64,
-    atten: bool = False,
-    aggregate: str = None,
-    tmp_dir: str = "./tmp",
-):
-    """Generate logits **and** hidden states for *prompts* with auto‑batch‑size."""
-
-    run_kwargs = {
-        "pad_token_id": tokenizer.pad_token_id,
-        # "output_hidden_states": True,
-    }
-    # layer_names = _derive_layer_names(model)[1:]
-    with capture_all_layers(model, move_to_cpu=True, atten=atten) as acts:
-        @find_executable_batch_size(starting_batch_size=starting_batch_size)
-        def _inner(bs):
-            all_logits, all_masks = [], []
-            all_hidden = defaultdict(list)  # Store hidden states    
-            id_ = 0
-            for i in tqdm(range(0, len(prompts), bs), desc=f"Generating (bs={bs})"):
-                
-                chunk = prompts[i : i + bs]
-                if base_model:
-                    wrapped = chunk
-                else:
-                    if template is None:
-                        raise ValueError(
-                            "A chat template must be supplied when base_model=False"
-                        )
-                    wrapped = [template["prompt"].format(instruction=p) for p in chunk]
-
-                # enc = tokenizer(chunk, return_tensors="pt", padding=True).to(model.device)
-                enc = tokenizer(
-                    wrapped, return_tensors="pt", padding=True, truncation=True
-                ).to(model.device)
-                # model.config.num_attention_heads
-                with torch.inference_mode():
-                    out = model(**enc, **run_kwargs)
-                    # print(acts)
-                for layer, tensors in acts.items():
-                    h_state = tensors[0].cpu() * enc.attention_mask.unsqueeze(-1).cpu()   # (B, L, 1)
-                    # print(tensors[0].shape)
-                    if atten: 
-                        H = model.config.num_attention_heads
-                        B, L, _ = h_state.shape
-                        h_state = h_state.view(B, L, H, -1).permute(0, 2, 1, 3)  # (B, H, L, HD)
-
-                        if aggregate == "sum":
-                            token_counts = enc.attention_mask.cpu().sum(dim=1).clamp(min=1)
-                            token_counts = token_counts.unsqueeze(1).unsqueeze(1)  # (B, 1, 1)
-                            h_state = h_state.sum(dim=2) / token_counts  # (B, H, HD)
-                        else:
-                            h_state = h_state[:, :, -1, :]
-                            print(layer, h_state.shape)
-                    else:
-                        if aggregate == "sum":
-                            token_counts = enc.attention_mask.cpu().sum(dim=1).clamp(min=1)  # (B, 1), to prevent divide-by-zero
-                            token_counts = token_counts.unsqueeze(1)
-                            h_state = h_state.sum(dim=1) / token_counts  # (B, HD)
-                        else:
-                            h_state = h_state[:, -1, :]   # (B, HD)
-
-                    # token_counts = mask.sum(dim=1, keepdim=True).clamp(min=1)    # (B, 1)
-                    # print(h_state.shape)
-                    # seq_avg = (tensors[0].cpu() * mask.cpu()).sum(dim=1) / token_counts.cpu()
-                    all_hidden[layer].append(h_state)
-
-                    del tensors[:], h_state #, token_counts
-                    gc.collect()
-                    torch.cuda.empty_cache()
-
-                id_ += 1
-                all_logits.append(out.logits[:, -1, :].cpu())
-                all_masks.append(enc.attention_mask.cpu())
-
-                print(f"Generated {len(chunk)} responses.")
-
-
-            return all_logits, all_masks, all_hidden
-
-        all_logits, all_masks, all_hidden = _inner()
-
-    # L_max = max(t.size(1) for t in all_masks)
-    # logits = torch.cat([F.pad(t, (0, 0, 0, L_max - t.size(1)))
-    #                     for t in all_logits], dim=0)
-    # masks  = torch.cat([F.pad(t, (0, L_max - t.size(1)))
-    #                     for t in all_masks], dim=0)
-    max_len = max(m.shape[1] for m in all_masks)
-
-    
-
-    # pad masks on the left of the seq dimension
-    padded_masks = [
-        F.pad(mask, (max_len - mask.size(1), 0))
-        for mask in all_masks
-    ]
-
-    # padded_states = {}
-    # for layer, states in acts.items():
-    #         padded_states[layer] = [
-    #             F.pad(h, (0, 0, max_len - h.size(1), 0))
-    #             for h in states
-            # ]
-    all_logits = torch.cat(all_logits, dim=0)       # [total_examples, max_len, vocab]
-    padded_masks  = torch.cat(padded_masks,  dim=0)       # [total_examples, max_len]
-    # states_tensor = {
-    #     layer: torch.cat(h_list, dim=0)                   # [total_examples, max_len, hid_dim]
-    #     for layer, h_list in padded_states.items()
-    # }  
-    all_hidden = {layer: torch.cat(h_list, dim=0) for layer, h_list in all_hidden.items()}
-    print(all_hidden[list(all_hidden.keys())[0]].shape)
-    return all_logits, padded_masks, all_hidden
 
 
 
@@ -244,7 +127,7 @@ def main(args):
     print(f"Loaded dataset {data} with {len(prompts)} items.")
 
     
-    all_logits, all_masks, all_states = run_prompting(
+    all_logits, all_masks, all_states, _ = run_prompting(
         model,
         tokenizer,
         prompts,
