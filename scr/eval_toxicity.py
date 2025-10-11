@@ -44,6 +44,7 @@ def parse_args():
     p = argparse.ArgumentParser("Evaluate LLM for harmful behavior on HarmBench.")
     p.add_argument("--model", default="QuixiAI/Wizard-Vicuna-7B-Uncensored") # meta-llama/Llama-3.1-8B, google/gemma-2-2b-it, meta-llama/Llama-3.2-3B-Instruct, meta-llama/Llama-3.2-3B, google/gemma-7b
     p.add_argument("--cls_model", default="cais/HarmBench-Mistral-7b-val-cls") #cais/HarmBench-Llama-2-13b-cls, cais/HarmBench-Mistral-7b-val-cls
+    p.add_argument("--dataset", default="walledai/HarmBench") #cais/HarmBench-Llama-2-13b-cls, cais/HarmBench-Mistral-7b-val-cls
 
     p.add_argument(
         "--behavior",
@@ -52,7 +53,7 @@ def parse_args():
     )
     p.add_argument("--bnb_config", type=str, default=None)
     p.add_argument("--num_prompts", type=int, default=30000)
-    p.add_argument("--output_dir", type=str, default="/data/erblina/Master_thesis")
+    p.add_argument("--output_dir", type=str, default="/mnt")
     p.add_argument("--max_new_tokens", type=int, default=256)
     p.add_argument("--temperature", type=float, default=0.7)
     p.add_argument("--top_p", type=float, default=0.9)
@@ -155,7 +156,7 @@ def main(args):
         bnb_config_2 = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16)
         cls_model, cls_tokenizer, cls_template, cls_name = load_classifier(args.dataset, device, bnb_config=bnb_config_2)
 
-        cls_template = LLAMA_CLS_PROMPT #if cls_template is None else cls_template
+        # cls_template = LLAMA_CLS_PROMPT #if cls_template is None else cls_template
         cls_results = classify_generation(
             filtered_prompts,
             filtered_responses,
@@ -194,10 +195,10 @@ def main(args):
 
 if __name__ == "__main__":
     args = parse_args()
-    args.model = "Qwen/Qwen2.5-3B-Instruct" #"Qwen/Qwen2.5-3B"
-    args.dataset = "walledai/HarmBench"
-    args.cls_model = "cais/HarmBench-Mistral-7b-val-cl"
-    args.output_dir = "/data/erblina/Master_thesis"
+    # args.model = "Qwen/Qwen2.5-3B-Instruct" #"Qwen/Qwen2.5-3B"
+    # args.dataset = "walledai/HarmBench"
+    # args.cls_model = "cais/HarmBench-Mistral-7b-val-cl"
+    # args.output_dir = "/data/erblina/Master_thesis"
     main(args)
 
 

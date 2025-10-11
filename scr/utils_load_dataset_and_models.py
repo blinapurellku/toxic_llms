@@ -80,7 +80,7 @@ def classify_response(sentence):
     
 
     
-filter_dts = lambda x: x['system_type'] == 'bening'
+filter_dts = lambda x: x['system_type'] == 'targeted'
 filter_rtp = lambda sample: sample.get("prompt", {}).get("toxic", 0) > 0.9
 filter_ddt = lambda x: x['toxic'] == True  # No filtering needed
 filter_tqa = lambda x: x["type"] == "Adversarial"
@@ -130,8 +130,14 @@ def load_dataset(dataset_name, flag=None):
                            spl, 
                            token=os.getenv("HUGGINGFACEHUB_API_TOKEN"), 
                            cache_dir="/hf",
-                           )
-        dataset = dataset['train']
+                           )['train']
+        
+    elif dataset_name == 'truthfulqa/truthful_qa':
+        dataset = hf_load_dataset(dataset_name, 
+                           spl, 
+                           token=os.getenv("HUGGINGFACEHUB_API_TOKEN"), 
+                           cache_dir="/hf",
+                           )#['validation']
     else:
         dataset = hf_load_dataset(dataset_name, 
                            split=spl, 
@@ -158,7 +164,9 @@ def load_classifier(data_name, device, bnb_config: Optional[BitsAndBytesConfig] 
         raise ValueError(f"Classifier model {data_name} not recognized. Available models: {list(classify_models_dict.keys())}")
     
     cls_model = classify_models_dict[data_name]
-    tokenizer = AutoTokenizer.from_pretrained(
+
+    if cls_model != 'classifier_function':
+        tokenizer = AutoTokenizer.from_pretrained(
             cls_model, padding_side="left", truncation_side="left", 
             token=os.getenv("HUGGINGFACEHUB_API_TOKEN"), cache_dir="/hf",
         )
@@ -225,7 +233,7 @@ def load_classifier(data_name, device, bnb_config: Optional[BitsAndBytesConfig] 
 
         template = BEAVER_TRAILS_PROMPT
 
-    elif data_name == 'classifier_function':
+    elif cls_model == 'classifier_function':
         model = classify_response
         tokenizer = None
         template = None
