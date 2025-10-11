@@ -122,8 +122,10 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
-    for m in [ "google/gemma-2-2b-it","meta-llama/Llama-3.2-3B-Instruct",
-        "google/gemma-2-2b","meta-llama/Llama-3.2-3B",
+    for m in [ "Qwen/Qwen2.5-3B", "Qwen/Qwen2.5-3B-Instruct"
+
+        #  "google/gemma-2-2b-it","meta-llama/Llama-3.2-3B-Instruct",
+        # "google/gemma-2-2b","meta-llama/Llama-3.2-3B",
         # "allenai/OLMo-2-0425-1B-SFT","allenai/OLMo-2-0425-1B-DPO","allenai/OLMo-2-0425-1B-Instruct",
         # "allenai/OLMo-2-0425-1B"
     ]: 

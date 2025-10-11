@@ -95,16 +95,18 @@ def main(args):
     print(f"Mean toxicity label: {avg_label:.3f}, {sum(valid_lab)}/{len(labels_before)} , valid responses: {len(valid_lab)}")
     # 2) Build a lookup of ALL named modules in the model
     res = {}
-    with open(os.path.join(save_path, "steered_perplexities.json")) as f:
-        perplexities = json.load(f)
-    # print(perplexities.keys())
-    with open(os.path.join(save_path, "base_perplexity.json")) as f:
-        base_perplexity = json.load(f)["base_perplexity"]
-    all_p = {}
+    # with open(os.path.join(save_path, "steered_perplexities.json")) as f:
+    #     perplexities = json.load(f)
+    # # print(perplexities.keys())
+    # with open(os.path.join(save_path, "base_perplexity.json")) as f:
+    #     base_perplexity = json.load(f)["base_perplexity"]
+    # all_p = {}
     for a in args.alpha: 
         res[a] = []
+        # a = str(a)
         # for x in perplexities[a]:
             # all_p = {x["layer_name"]: x["perplexity"]}
+            # labels_steering_toxic_alpha_-0.5.npy
         labels_after = np.load(f"{args.output_dir}/{safe_model_name}/labels_steering_{side}_alpha_{a}.npy", allow_pickle=True).item()
         layer_names = list(labels_after.keys())
         layer_names = sorted(list(labels_after.keys()), key=lambda x: int(x.split('.')[-1]))
@@ -248,16 +250,16 @@ def main(args):
 if __name__ == "__main__":
     # for i, model in enumerate(["allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct", "allenai/OLMo-2-0425-1B"]):
          #["google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct", "google/gemma-2-2b", "meta-llama/Llama-3.2-3B"]): #"google/gemma-2-2b-it",
-    for i, model in enumerate(["allenai/OLMo-2-0425-1B"]):
+    for i, model in enumerate(["Qwen/Qwen2.5-3B-Instruct"]):#, "Qwen/Qwen2.5-3B-Instruct"]):
         args = parse_args()
         args.model = model
-        alpha = [-0.09, -0.08, -0.07, -0.06, -0.05, -0.04, -0.03, -0.02, -0.01]
-        alpha += [0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09]
+        # alpha = [-0.09, -0.08, -0.07, -0.06, -0.05, -0.04, -0.03, -0.02, -0.01]
+        # alpha += [0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09]
 
-        # alpha += [-0.5, -1.0, -1.5, -2.0, -2.5, -3.0, -3.5, -4.0, -4.5, -5.0]
-        alpha += [0.05, 0.1, 0.15, 0.2, 0.25]#, 0.3, 0.35, 0.4]
-        alpha += [-0.05, -0.1, -0.15, -0.2, -0.25]#, -0.3, -0.35, -0.4]
-        # alpha += [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]  
+        alpha = [-0.5, -1.5, -2.0, -2.5, -3.0, -3.5, -4.0, -4.5, -5.0]
+        # alpha += [0.05, 0.1, 0.15, 0.2, 0.25]#, 0.3, 0.35, 0.4]
+        # alpha += [-0.05, -0.1, -0.15, -0.2, -0.25]#, -0.3, -0.35, -0.4]
+        alpha += [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]  
         print(f"Running evaluation for model: {args.model} with alphas: {alpha}")
         args.alpha = alpha
         main(args)

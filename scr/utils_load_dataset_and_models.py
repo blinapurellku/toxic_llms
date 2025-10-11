@@ -125,16 +125,23 @@ def load_dataset(dataset_name, flag=None):
     if flag is not None and dataset_name == 'walledai/DTToxicity':
         spl = flag
 
-    dataset = hf_load_dataset(dataset_name, 
+    if dataset_name == 'walledai/HarmBench':
+        dataset = hf_load_dataset(dataset_name, 
                            spl, 
+                        #    token=os.getenv("HUGGINGFACEHUB_API_TOKEN"), 
+                        #    cache_dir="/hf",
+                           )
+        dataset = dataset['train']
+    else:
+        dataset = hf_load_dataset(dataset_name, 
+                           split=spl, 
                         #    token=os.getenv("HUGGINGFACEHUB_API_TOKEN"), 
                         #    cache_dir="/hf",
                            )
     if filter_dataset:
         dataset = dataset.filter(filter_dataset, batched=False)
     
-    if dataset_name == 'walledai/HarmBench':
-        dataset = dataset['train']
+    
 
     if dataset_name == 'allenai/real-toxicity-prompts':
         dataset = dataset.map(lambda x: {'prompt': x['prompt']['text']})

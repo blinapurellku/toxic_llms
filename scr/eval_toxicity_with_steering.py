@@ -31,7 +31,7 @@ from transformers import (AutoModelForCausalLM, AutoTokenizer,
                           BitsAndBytesConfig)
 from utils_evaluating_toxicity import classify_generation
 from utils_load_dataset_and_models import load_model_and_tokenizer, load_classifier, load_dataset, classify_models_dict
-from generate_responses import classify_generation, generate_responses
+from generate_responses import generate_responses
 from utils_hooks import steering_vector_hook
 
 # Optional: avoid error spam from Torch Dynamo
@@ -103,8 +103,8 @@ def main(args):
     safe_dataset = re.sub(r'[\\/*?:"<>|]', "_", args.dataset)
     safe_model_name = re.sub(r'[\\/*?:"<>|]', "_", args.model)
     cls_name = classify_models_dict[args.dataset] if args.dataset in classify_models_dict else None
-
-    model, tokenizer = load_model_and_tokenizer(args.model, args.base_model, bnb_config=bnb_config_1)
+    print(device)
+    model, tokenizer = load_model_and_tokenizer(args.model, device, args.base_model, bnb_config=bnb_config_1)
     pad_token_id = tokenizer.pad_token_id  # Save this for later use
 
     template = None
@@ -326,15 +326,21 @@ model_steering = {
     'allenai/OLMo-2-0425-1B-Instruct': {'layers': [ 'model.layers.7', 'model.layers.8', 'model.layers.9'], 'alphas_up': [1.5, 1.5, 1.5], 'alphas_down': [ -1.0, -1.0, -1.0], 'max_avg_tox': [ 0.705, 0.69, 0.655], 'min_avg_tox': [ 0.0, 0.0, 0.0]},
 
     'allenai/OLMo-2-0425-1B': {'layers': ['model.layers.13', 'model.layers.3', 'model.layers.7', 'model.layers.9'], 'alphas_up': [-0.2, 0.03, -0.07, -0.06], 'alphas_down': [-0.5, -1.5, -1.5, -1.5], 'max_avg_tox': [0.41, 0.395, 0.39, 0.385], 'min_avg_tox': [0.28, 0.12, 0.135, 0.135]},
+    
+    'Qwen/Qwen2.5-3B': {'layers': [ 'model.layers.19', 'model.layers.20', 'model.layers.23'], 'alphas_up': [ 1.5, 1.5, 1.5], 'alphas_down': [ -1.5, -1.5, -1.5], 'max_avg_tox': [ 0.84, 0.765, 0.755], 'min_avg_tox': [ 0.265, 0.235, 0.25]},
+
+    'Qwen/Qwen2.5-3B-Instruct': {'layers': [ 'model.layers.23', 'model.layers.22', 'model.layers.24'], 'alphas_up': [ 1.5, 1.5, 1.5], 'alphas_down': [  -0.5, -1.5, -1.5], 'max_avg_tox': [ 0.71, 0.66, 0.63], 'min_avg_tox': [  0.0, 0.0, 0.0]},
+    
     }
 
 if __name__ == "__main__":
     
     # for _, model in enumerate(["google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct"]): #"google/gemma-2-2b-it",
     args = parse_args()
-    model = args.model
-    args.dataset = "truthfulqa/truthful_qa"
-    args.cls_model = "allenai/truthfulqa-truth-judge-llama2-7B"
+    model = "Qwen/Qwen2.5-3B" # "Qwen/Qwen2.5-3B-Instruct" #"google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct"
+    args.dataset = "walledai/AdvBench" #"truthfulqa/truthful_qa"     ["walledai/AdvBench", "walledai/DTStereotype", "walledai/CatHarmfulQA","walledai/DTToxicity","truthfulqa/truthful_qa"]
+
+    # args.cls_model = "allenai/truthfulqa-truth-judge-llama2-7B"
     info = model_steering[model]
     layers = info['layers']
     alpha_pos = info['alphas_up']
