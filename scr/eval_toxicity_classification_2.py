@@ -18,10 +18,10 @@ import torch
 from accelerate.utils import find_executable_batch_size
 from datasets import load_dataset
 from safetensors.torch import save_file as save_safetensors
-from templates import LLAMA_CLS_PROMPT, get_template, MISTRAL_CLS_PROMPT
+from toxicity_llms.scr.utils_templates import LLAMA_CLS_PROMPT, get_template, MISTRAL_CLS_PROMPT
 from tqdm import tqdm
 from transformers import (AutoModelForCausalLM, AutoTokenizer,
-                          BitsAndBytesConfig)
+                          BitsAndBytesConfig, AutoModelForSequenceClassification)
 
 # Optional: avoid error spam from Torch Dynamo
 torch._dynamo.config.suppress_errors = False
@@ -177,68 +177,54 @@ def classify_generation(
     bnb_config_1 = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16)
 
     print(f"Loading classifier: {cls_model_id}")
-    cls_model = AutoModelForCausalLM.from_pretrained(
+    # cls_model = AutoModelForCausalLM.from_pretrained(
+    cls_model = AutoModelForSequenceClassification.from_pretrained(
         cls_model_id,
-        quantization_config=bnb_config_1,
+        # quantization_config=bnb_config_1,
         # torch_dtype=torch.bfloat16, if torch.cuda.is_available() else torch.float32,
+        # truncation=True, 
+        # max_length=512,
         device_map=device,  # "auto",
         token=os.getenv("HUGGINGFACEHUB_API_TOKEN"),
         cache_dir="/hf",
     ).eval()
     cls_tokenizer = AutoTokenizer.from_pretrained(
-        cls_model_id, padding_side="left", truncation_side="left", token=os.getenv("HUGGINGFACEHUB_API_TOKEN"), cache_dir="/hf",
+        cls_model_id, padding_side="left", truncation_side="left", max_length=4096,  
+        token=os.getenv("HUGGINGFACEHUB_API_TOKEN"), cache_dir="/hf",
     )
-
-    templ = LLAMA_CLS_PROMPT["prompt"]
-    combined_inputs = [
-        templ.format(behavior=u, generation=v) for u, v in zip(prompts, responses)
-    ]
-
+    
+    # build inputs
+    pairs = [f"PROMPT:\n{u}\n\nRESPONSE:\n{v}" for u, v in zip(prompts, responses)]
 
     @find_executable_batch_size(starting_batch_size=batch_size)
     def _classify_batch_safely(bs):
-        l_results = []
-        for i in tqdm(
-            range(0, len(combined_inputs), bs),
-            desc=f"Classifying with {cls_model_id} (bs={bs})",
-        ):
-            batch_texts = combined_inputs[i : i + bs]
-            enc = cls_tokenizer(batch_texts, return_tensors="pt", padding="longest").to(
-                cls_model.device
-            )
+        out_labels = []
+        for i in tqdm(range(0, len(pairs), bs), desc=f"Classifying with {cls_model_id} (bs={bs})"):
+            batch_texts = pairs[i : i + bs]
+            enc = cls_tokenizer(
+                batch_texts, return_tensors="pt", padding=True, truncation=True, #max_length=4096,
+            ).to(cls_model.device)
             with torch.inference_mode():
-                out = cls_model.generate(
-                    **enc, do_sample=False, max_new_tokens=1
-                ).cpu()
+                out = cls_model(**enc).logits
+            preds = out.argmax(-1).tolist()
+            out_labels.extend(preds)
 
-            toks = out[:, enc.input_ids.shape[1] :]
-            decoded = cls_tokenizer.batch_decode(toks, skip_special_tokens=True)
-
-            for d in decoded:
-                label = d.strip().lower()
-                if label == "yes":
-                    is_toxic = 1
-                elif label == "no":
-                    is_toxic = 0
-                else:
-                    is_toxic = -1
-                    print(f"Unexpected label '{label}' in: {d}")
-
-                l_results.append(is_toxic)
-        print(len(l_results), "responses classified")
-        return l_results
+        print(len(out_labels), "responses classified")
+        return out_labels
 
     results = _classify_batch_safely()
 
     del cls_model, cls_tokenizer
-    if torch.cuda.is_available():
-        gc.collect()               
+    if torch.cuda.is_available():   
+        gc.collect()
         torch.cuda.empty_cache()
-
 
     return results
 
-  
+
+def filter_fn(sample):
+    tox = sample.get("prompt", {}).get("toxicity") if "prompt" in sample else None
+    return tox is not None and tox > 0.9 
 
 def parse_args():
     p = argparse.ArgumentParser("Evaluate LLM for harmful behavior on HarmBench.")
@@ -295,12 +281,13 @@ def main(args):
         print("Using template", template["description"])
 
     print(f"Loading the {args.dataset} dataset")
-    data = args.dataset
-    dataset = load_dataset(data, "standard", token=os.getenv("HUGGINGFACEHUB_API_TOKEN"), cache_dir="/hf")["train"]
+    dataset = args.dataset
+    dataset = load_dataset(dataset, split="train", token=os.getenv("HUGGINGFACEHUB_API_TOKEN"), cache_dir="/hf")
+    safe_dataset = re.sub(r'[\\/*?:"<>|]', "_", args.dataset)
+   
     count = min(args.num_prompts, len(dataset))
-    prompts = [ex["prompt"] for ex in dataset.select(range(count))]
-    print(f"Loaded {len(prompts)} prompts from {data} dataset.")
-
+    prompts = [ex["question"] for ex in dataset.select(range(count))]
+   
     responses = generate_responses(
         model,
         tokenizer,
@@ -358,7 +345,7 @@ def main(args):
 
     # Create a safe filename by replacing problematic characters
     safe_model_name = re.sub(r'[\\/*?:"<>|]', "_", args.model)
-    safe_data = re.sub(r'[\\/*?:"<>|]', "_", data)
+    safe_data = re.sub(r'[\\/*?:"<>|]', "_", args.dataset)
     os.makedirs(f"{args.output_dir}/{safe_model_name}", exist_ok=True)
 
     
@@ -377,5 +364,9 @@ def main(args):
 
 if __name__ == "__main__":
     args = parse_args()
-    args.dataset = "walledai/AdvBench"
+    args.dataset = "LibrAI/do-not-answer"   # DNA-style
+    args.cls_model = "LibrAI/longformer-harmful-ro"
+    # args.dataset = "allenai/real-toxicity-prompts" #"toxigen/toxigen-data" # "walledai/HarmBench" # ""toxigen/toxigen-data" LibrAI/do-not-answer same as walledai/DNA  (model: LibrAI/longformer-harmful-ro) / walledai/CSRT
+    # args.cls_model = "facebook/roberta-hate-speech-dynabench-r4-target" #"tomh/toxigen_hatebert" # "Xuhui/ToxDect-roberta-large", "GroNLP/hateBERT", "tomh/toxigen_hatebert"
     main(args)
+# walledai/ForbiddenQuestions, walledai/BeaverTailsEval, walledai/StrongREJECT, walledai/DTToxicity, walledai/CatHarmfulQA declare-lab/CategoricalHarmfulQA
