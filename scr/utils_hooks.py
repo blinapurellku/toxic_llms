@@ -1,6 +1,8 @@
+from ast import mod
 import os
 from collections import defaultdict
 from contextlib import contextmanager
+from typing import Dict, List, Optional, Tuple, Union
 
 import torch
 
@@ -62,6 +64,38 @@ def steering_vector_hook(
     return module.register_forward_hook(_hook)
 
 
+
+def ablation_hook(
+    module: torch.nn.Module,
+    head: int = -1,
+    num_head: int = 8, # head number of the layer
+    ablate: bool = True,
+    s_mean : Optional[torch.Tensor] = None,
+) -> torch.utils.hooks.RemovableHandle:
+    """
+    Register a forward pre‐hook on `module` that zeroes out specific indices in its output.
+    Returns the hook handle so you can remove it later.
+    """
+    # s_mean = s_mean.detach()
+    s_mean = s_mean.detach() if isinstance(s_mean, torch.Tensor) else None
+
+    def _hook(_m, inp):
+        # Handle HF blocks that return tuples (hidden, present, …)
+        tgt = inp[0] if isinstance(inp, tuple) else inp  # (B, L, H)
+        B, L, _ = tgt.shape
+        tgt = tgt.reshape(B, L, num_head, -1)  # (B, L, num_heads, head_dim)
+        _, _, _, head_dim = tgt.shape
+        if ablate:
+            tgt[:, :, head, :].zero_()  # (B, L, H)
+        else:
+            s_mean = s_mean.to(dtype=tgt.dtype, device=tgt.device)
+            tgt[:, :, head, :] = s_mean.unsqueeze(1).expand(B, tgt.size(1), head_dim)  # (B, L, H)
+        
+        tgt = tgt.reshape(B, L, -1)  # (B, L, H)
+
+        return (tgt,)+ inp[1:] if isinstance(inp, tuple) else tgt
+        
+    return module.register_forward_pre_hook(_hook)
 
 
 @contextmanager
