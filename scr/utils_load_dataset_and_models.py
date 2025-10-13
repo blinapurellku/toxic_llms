@@ -137,7 +137,7 @@ def load_dataset(dataset_name, flag=None):
                            spl, 
                         #    token=os.getenv("HUGGINGFACEHUB_API_TOKEN"), 
                         #    cache_dir="/hf",
-                           ) #['validation']
+                           )['validation']
     else:
         dataset = hf_load_dataset(dataset_name, 
                            split=spl, 

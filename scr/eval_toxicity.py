@@ -194,8 +194,8 @@ def main(args):
 
 if __name__ == "__main__":
     args = parse_args()
-    args.model = "Qwen/Qwen2.5-3B-Instruct" #"Qwen/Qwen2.5-3B"
-    args.dataset = "walledai/HarmBench"
+    args.model = "allenai/OLMo-2-0425-1B" #Qwen/Qwen2.5-3B-Instruct" #"Qwen/Qwen2.5-3B"
+    args.dataset = "truthfulqa/truthful_qa" #"walledai/HarmBench"
     args.cls_model = "cais/HarmBench-Mistral-7b-val-cl"
     args.output_dir = "/data/erblina/Master_thesis"
     main(args)

@@ -130,7 +130,7 @@ def parse_args():
 def main(args):
     
 
-    model, tokenizer = load_model_and_tokenizer(args.model, bnb_config=args.bnb_config)#, output_hidden_states=False)
+    model, tokenizer = load_model_and_tokenizer(args.model, device, bnb_config=None)#, output_hidden_states=False)
     pad_token_id = tokenizer.pad_token_id  # Save this for later use
 
     template = None
@@ -228,7 +228,7 @@ def main(args):
 
 if __name__ == "__main__":
     args = parse_args()
-    for model in ["google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct", "allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct"]: #"google/gemma-2-2b", "meta-llama/Llama-3.2-3B"]:
+    for model in ["Qwen/Qwen2.5-3B"]:#google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct", "allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct"]: #"google/gemma-2-2b", "meta-llama/Llama-3.2-3B"]:
         args.model = model
         print(f"Processing model {model}")
         main(args)

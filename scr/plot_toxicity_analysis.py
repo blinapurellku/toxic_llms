@@ -452,6 +452,11 @@ def main(args):
     'allenai/OLMo-2-0425-1B-Instruct': {'layers': [ 'model.layers.7', 'model.layers.8', 'model.layers.9'], 'alphas_up': [1.5, 1.5, 1.5], 'alphas_down': [ -1.0, -1.0, -1.0], 'max_avg_tox': [ 0.705, 0.69, 0.655], 'min_avg_tox': [ 0.0, 0.0, 0.0]},
 
     'allenai/OLMo-2-0425-1B': {'layers': ['model.layers.13', 'model.layers.3', 'model.layers.7', 'model.layers.9'], 'alphas_up': [-0.2, 0.03, -0.07, -0.06], 'alphas_down': [-0.5, -1.5, -1.5, -1.5], 'max_avg_tox': [0.41, 0.395, 0.39, 0.385], 'min_avg_tox': [0.28, 0.12, 0.135, 0.135]},
+    
+    'Qwen/Qwen2.5-3B': {'layers': [ 'model.layers.19', 'model.layers.20', 'model.layers.23'], 'alphas_up': [ 1.5, 1.5, 1.5], 'alphas_down': [ -1.5, -1.5, -1.5], 'max_avg_tox': [ 0.84, 0.765, 0.755], 'min_avg_tox': [ 0.265, 0.235, 0.25]},
+
+    'Qwen/Qwen2.5-3B-Instruct': {'layers': [ 'model.layers.23', 'model.layers.22', 'model.layers.24'], 'alphas_up': [ 1.5, 1.5, 1.5], 'alphas_down': [  -0.5, -1.5, -1.5], 'max_avg_tox': [ 0.71, 0.66, 0.63], 'min_avg_tox': [  0.0, 0.0, 0.0]},
+    
     }
     print(args.model)
     info = model_steering[args.model]
@@ -557,7 +562,7 @@ def main(args):
 
 if __name__ == "__main__":
     args = parse_args()
-    for _, model in enumerate(["google/gemma-2-2b", "meta-llama/Llama-3.2-3B", "allenai/OLMo-2-0425-1B", "google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct", "allenai/OLMo-2-0425-1B-Instruct"]): #"google/gemma-2-2b-it", , "allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO"
+    for _, model in enumerate(["Qwen/Qwen2.5-3B", "Qwen/Qwen2.5-3B-Instruct", "google/gemma-2-2b", "meta-llama/Llama-3.2-3B", "allenai/OLMo-2-0425-1B", "google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct", "allenai/OLMo-2-0425-1B-Instruct"]): #"google/gemma-2-2b-it", , "allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO"
         
         args.model = model
         args.dataset = ["walledai/AdvBench", "walledai/DTStereotype", "walledai/CatHarmfulQA","walledai/DTToxicity","truthfulqa/truthful_qa"]

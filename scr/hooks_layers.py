@@ -127,7 +127,7 @@ def main(args):
     print(f"Loaded dataset {data} with {len(prompts)} items.")
 
     
-    all_logits, all_masks, all_states, _ = run_prompting(
+    all_logits, all_masks, all_states, all_states_s = run_prompting(
         model,
         tokenizer,
         prompts,
@@ -157,7 +157,12 @@ def main(args):
     if atten:
         save_safetensors(
         all_states,
-        os.path.join(save_path, f"attention_state_pure.safetensors"),
+        os.path.join(save_path, f"attention_states_pure.safetensors"),
+        )
+
+        save_safetensors(
+            all_states_s,
+            os.path.join(save_path, f"attention_states_sum_pure.safetensors"),
         )
 
     else:
@@ -182,6 +187,11 @@ def main(args):
             os.path.join(save_path, f"hidden_states_pure.safetensors"),
         )
 
+        save_safetensors(
+            all_states_s,
+            os.path.join(save_path, f"hidden_states_sum_pure.safetensors"),
+        )
+
     
 # model.layers.0.self_attn
         
@@ -189,15 +199,18 @@ def main(args):
 
 if __name__ == "__main__":
     args = parse_args()
-    args.model = "Qwen/Qwen2.5-3B-Instruct" #"Qwen/Qwen2.5-3B"
+    # args.model = "Qwen/Qwen2.5-3B" #"Qwen/Qwen2.5-3B"
+    # models = ["allenai/OLMo-2-0425-1B", "google/gemma-2-2b", "meta-llama/Llama-3.2-3B"] #["allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct"] #"allenai/OLMo-2-0425-1B"
+    models = ["allenai/OLMo-2-0425-1B-Instruct", "google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct"]
     args.dataset = "walledai/HarmBench"
     args.cls_model = "cais/HarmBench-Mistral-7b-val-cl"
     args.output_dir = "/data/erblina/Master_thesis"
-    main(args)
-    # # models = ["google/gemma-2-2b-it", "google/gemma-2-2b", "meta-llama/Llama-3.2-3B", "meta-llama/Llama-3.2-3B-Instruct"]
+    for model in models:
+        args.model=model
+        main(args)
+    # # models = ["allenai/OLMo-2-0425-1B-Instruct", "google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct"]
 
     # # for model in models:
-    # models = ["allenai/OLMo-2-0425-1B"] #["allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct"] #"allenai/OLMo-2-0425-1B"
     # for model in models:
     #     args.model=model
     #     main(args)

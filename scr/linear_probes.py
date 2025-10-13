@@ -283,7 +283,7 @@ def main(args):
     save_path = os.path.join(args.output_dir, safe_model_name, "linear_probes")
     os.makedirs(save_path, exist_ok=True)
     safe_data = re.sub(r'[\\/*?:"<>|]', "_", "unalignment/toxic-dpo-v0.2") # "walledai/HarmBench"
-    t = "_sum_" # _sum_ or _ or _s_
+    t = "_last_" # _sum_ or _ or _s_
     hidden_states_refusal = load_safetensors(
         # os.path.join(save_path, f"hidden_states_gen{t}refusal_{safe_data}.safetensors")
         os.path.join(save_path, f"hidden_states_gen{t}refusal.safetensors")
@@ -623,8 +623,8 @@ def main(args):
 
 if __name__ == "__main__":
     args = parse_args()
-    for model in ["google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct", "google/gemma-2-2b", "meta-llama/Llama-3.2-3B",
-                  "allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct", "allenai/OLMo-2-0425-1B"]: #"meta-llama/Llama-3.1-8B", "google/gemma-7b",
+    for model in ["Qwen/Qwen2.5-3B-Instruct", "Qwen/Qwen2.5-3B"]: #"google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct", "google/gemma-2-2b", "meta-llama/Llama-3.2-3B",
+    #               "allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct", "allenai/OLMo-2-0425-1B"]: #"meta-llama/Llama-3.1-8B", "google/gemma-7b",
         args.model = model
         main(args)
     # for cls_model in ["logreg", "sgd_log"]: #"ridge", "nearest_centroid", "lda", "kmeans"]: #"linear_svc", "svc_linear", "ridge", "sgd_log", "sgd_hinge",
