@@ -1,12 +1,10 @@
 
 import argparse
 import gc
-import json
 import os
+# from random import random, choices
 import re
-from collections import defaultdict
-from contextlib import contextmanager
-from typing import Dict, List, Optional, Tuple, Union
+import random
 
 # Set environment variables to disable various optimizations
 os.environ["TORCHINDUCTOR_DISABLE"] = "1"
@@ -17,14 +15,12 @@ os.environ["TRANSFORMERS_NO_COMPILE"] = "1"
 
 import pandas as pd
 import torch
-import torch.nn.functional as F
-from accelerate.utils import find_executable_batch_size
 from datasets import load_dataset
 from safetensors.torch import save_file as save_safetensors
-from utils_templates import LLAMA_CLS_PROMPT, get_template
-from tqdm import tqdm
-from transformers import (AutoModelForCausalLM, AutoTokenizer,
-                          BitsAndBytesConfig)
+from utils_templates import get_template
+from utils_load_dataset_and_models import load_model_and_tokenizer
+from transformers import (BitsAndBytesConfig)
+from generate_responses import run_prompting_generate as run_prompting
 
 # ────────────────────────────────────────────────────────── constants ──
 TORCH_DT = torch.bfloat16
@@ -52,271 +48,73 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 bnb_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16)
 
 
+refusal_responses = [
+        "I'm sorry, but I can't assist with that request.",
+        "I apologize, but I won't be able to help with that.",
+        "I'm sorry, but I cannot provide that information.",
+        "I apologize, but I am unable to assist with that request.",
+        "I'm sorry, but I can't help with that.",
+        "I apologize, but I won't be able to provide that information.",
+        "I'm sorry, but I cannot assist with that request.",
+        "I apologize, but I am unable to help with that.",
+        "I'm sorry, but I can't provide assistance with that.",
+        "I apologize, but I won't be able to help with that request.",
+        "That's not something I can support. If you have another question or need help with a different topic, I'm here to help.",
+        "I'm afraid I can't assist with that. It involves content that's restricted for safety, ethical, or legal reasons.",
+        "I must respectfully decline your request. Let me know if there's anything else I can assist you with.",
+        "For safety reasons, I can't provide that.",
+        "Due to ethical concerns, I can't assist with that request.",
+        "I'm unable to help with that due to safety guidelines.",
+        "I can't provide that information because it goes against ethical standards.",
+        "I'm sorry, but I must decline your request for safety reasons.",
+        "I cannot assist with that due to ethical considerations.",
+        "Because of legal restrictions, I cannot share that information.",
+        "That request isn't possible, though I can help you with another topic.",
+        "I can't provide that, but I can suggest safer alternatives.",
+        "Unfortunately, I can't help with that.",
+        "That's not something I'm able to provide.",
+        "That's not something I can do.",
+        "This request cannot be completed.",
+        "Providing that information isn't possible.",
+    ]
 
-def _derive_layer_names(model) -> List[str]:
-    """Return a list of *attribute paths* for each hidden‑state slot.
 
-    The list length == ``num_hidden_layers + 1`` (extra slot 0 for embeddings).
 
-    Examples
-    --------
-    * Llama‑family → ``[embeddings, 'model.model.layers.0', …]``
-    * GPT‑2/GPT‑J   → ``[embeddings, 'transformer.h.0', …]``
+def get_dataset(dataset_name=None):
 
-    If the exact container list cannot be detected, we fall back to
-    `'layer_{i}'` so the code still runs.
-    """
+    if dataset_name == "walledai/HarmBench":
+        print(f"loading {dataset_name} dataset")
+        safe_model_name = re.sub(r'[\\/*?:"<>|]', "_", "w4r10ck/SOLAR-10.7B-Instruct-v1.0-uncensored")
+        out_path = os.path.join(args.output_dir, f"{safe_model_name}/eval_toxicity.csv")
+        df = pd.read_csv(out_path, sep=";")
+        df_col = list(df.columns)
+        labels = df[df_col[-1]].to_numpy()
+        df = df[labels == 1]
 
-    # 1) Common decoder‑only HF models: <top>.model.layers (Llama, Gemma, …)
-    if hasattr(model, "model") and hasattr(model.model, "layers"):
-        n = len(model.model.layers)
-        return ["embeddings"] + [f"model.model.layers.{i}" for i in range(n)]
+        dataset = load_dataset("walledai/HarmBench", "standard")["train"]
+        dataset = dataset.filter(lambda ex: ex["prompt"] in set(df["prompt"]))  
+        prompts = [ex["prompt"] for ex in dataset]
+        responses_chosen = df["model_output"].tolist()
+        responses_refused = random.choices(refusal_responses, k=len(prompts))
+        random.shuffle(responses_refused)
 
-    # 2) GPT‑style: <top>.transformer.h
-    if hasattr(model, "transformer") and hasattr(model.transformer, "h"):
-        n = len(model.transformer.h)
-        return ["embeddings"] + [f"transformer.h.{i}" for i in range(n)]
-
-    # 3) Fallback – numeric names
-    n = getattr(model.config, "num_hidden_layers", None)
-    if n is None:
-        raise ValueError("Could not determine transformer block count.")
-    return ["embeddings"] + [f"layer_{i}" for i in range(n)]
-
-def load_model_and_tokenizer(
-    model_name: str,
-    bnb_config: bool = True,
-    output_hidden_states: bool = True,
-):
-    """Load model + tokenizer so hidden states are *always* produced."""
-
-   
-    tokenizer = AutoTokenizer.from_pretrained(model_name, padding_side="left", truncation_side="left")
-    tokenizer.pad_token = tokenizer.pad_token or tokenizer.eos_token
-
-    if bnb_config:
-        bnb_config = BitsAndBytesConfig(load_in_8bit=True, bnb_8bit_compute_dtype=torch.bfloat16)
-
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            # torch_dtype=torch.bfloat16,
-            quantization_config=bnb_config,
-            device_map=device, #"auto",
-            output_hidden_states=output_hidden_states,  # Enable hidden states output
-        ).eval()
     else:
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            torch_dtype=torch.bfloat16,
-            device_map=device,  # "auto",
-            output_hidden_states=output_hidden_states,  # Enable hidden states output
-        ).eval()
+        print(f"loading unalignment/toxic-dpo-v0.2 dataset")
 
+        dataset = load_dataset("unalignment/toxic-dpo-v0.2")["train"]
+        prompts = dataset["prompt"]
+        responses_chosen = dataset["chosen"]
+        responses_refused = dataset["rejected"]
 
-    model.config.pad_token_id = tokenizer.pad_token_id
-    # model.config.output_hidden_states = output_hidden_states  # Enable hidden states output
-    return model, tokenizer
-
-
-@contextmanager
-def capture_all_layers(model,
-                       move_to_cpu: bool = True,
-                       pad_and_concat: bool = False):
-    """
-    Record post-block residual streams for *all* decoder layers.
-
-    Yields
-    ------
-    store : dict[str, list[Tensor] | Tensor]
-        While inside the `with`-block a list[Tensor] accumulates per layer.
-        On exit, lists are optionally left as-is (*pad_and_concat=False*)
-        or left-padded to the layer’s max sequence length and concatenated
-        into a single tensor (*pad_and_concat=True*).
-    """
-    store, handles = defaultdict(list), []
-
-    def _factory(name):
-        def _hook(_m, _inp, out):
-            h = out[0] if isinstance(out, tuple) else out      # (B,L,H)
-            h = h.detach().cpu()
-            # print(f"Captured {name} with shape {h.shape}")
-            # if move_to_cpu:
-            #     h = h.to("cpu", non_blocking=True)
-            store[name].append(h.bfloat16())
-            # print(store[name][-1].shape)
-            return out
-        return _hook
-    
-    if hasattr(model, "model") and hasattr(model.model, "layers"):
-        n = len(model.model.layers)
-        layeres = [f"model.layers.{i}" for i in range(n)]
-        print(f"Detected {len(layeres)} layers: {layeres}")
-
-    # 2) GPT‑style: <top>.transformer.h
-    elif hasattr(model, "transformer") and hasattr(model.transformer, "h"):
-        n = len(model.transformer.h)
-        layeres =  [f"transformer.h.{i}" for i in range(n)]
-
-    # 3) Fallback – numeric names
-    # else:
-    #     n = getattr(model.config, "num_hidden_layers", None)
-    #     if n is None:
-    #         raise ValueError("Could not determine transformer block count.")
-    #     layeres =  [f"layer_{i}" for i in range(n)]
-
-    print(f"Detected {len(layeres)} layers: {layeres}")
-    for n, m in model.named_modules():
-        if (n.startswith("model.layers.") and n in layeres):   # old typo variant
-                  # GPT style
-            print(f"Registering hook for {n}")
-            handles.append(m.register_forward_hook(_factory(n)))
-        elif n.startswith("transformer.h.") and n in layeres:
-            print(f"Registering hook for {n}")
-            handles.append(m.register_forward_hook(_factory(n)))
-
-    # for n, m in model.named_modules():
-    #     if n.startswith("model.model.layers.") or n.startswith("transformer.h."):
-    #         handles.append(m.register_forward_hook(_factory(n)))
-
-    try:
-        yield store
-    finally:
-        for h in handles:
-            h.remove()
-
-        
-
-@torch.no_grad()
-def run_prompting(
-    model,
-    tokenizer,
-    prompts,
-    base_model: bool = False,
-    max_new_tokens: int = 100,
-    do_sample: bool = False,
-    temperature: float = 1.0,
-    top_p: float = 0.9,
-    starting_batch_size: int = 4,
-    template: dict | None = None,
-    output_dir: str = "./",
-):
-    """Generate logits **and** hidden states for *prompts* with auto‑batch‑size."""
-    gen_kwargs = {
-        "max_new_tokens": max_new_tokens,
-        "pad_token_id": tokenizer.pad_token_id,
-        # "return_dict_in_generate": True,  # Return a more detailed output object
-    }
-    if do_sample:
-        gen_kwargs.update(
-            {"do_sample": True, "temperature": temperature, "top_p": top_p}
-        )
-    
-    # run_kwargs = {
-    #     "pad_token_id": tokenizer.pad_token_id,
-    #     # "output_hidden_states": True,
-    # }
-    # layer_names = _derive_layer_names(model)[1:]
-    with capture_all_layers(model, move_to_cpu=True) as acts:
-        @find_executable_batch_size(starting_batch_size=starting_batch_size)
-        def _inner(bs):
-            all_logits, all_masks = [], []
-            all_hidden = defaultdict(list)  # Store hidden states    
-            id_ = 0
-            for i in tqdm(range(0, len(prompts), bs), desc=f"Generating (bs={bs})"):
-                chunk = prompts[i : i + bs]
-                if base_model:
-                    wrapped = chunk
-                else:
-                    if template is None:
-                        raise ValueError(
-                            "A chat template must be supplied when base_model=False"
-                        )
-                    wrapped = [template["prompt"].format(instruction=p) for p in chunk]
-
-                # enc = tokenizer(chunk, return_tensors="pt", padding=True).to(model.device)
-                enc = tokenizer(
-                    wrapped, return_tensors="pt", padding=True, truncation=True
-                ).to(model.device)
-
-                with torch.inference_mode():
-                    generation_output = model.generate(**enc, **gen_kwargs).cpu()
-                    # out = model(**enc, **run_kwargs)
-                    # print(acts)
-                for layer, tensors in acts.items():
-                    h_state = [t[:, -1, :] for t in tensors]
-                    h_state = torch.stack(h_state, dim=1)  # (B, L, HD)
-                    print(f"Layer {layer} has {len(h_state)} tensors with shape {h_state.shape}.")
-                    h_state = h_state.mean(dim=1)  # (B, HD)
-                      # Stack all hidden states
-                    print(layer, tensors[0].shape)
-                    print(f"Processing layer {layer} with {len(tensors)} tensors.")
-
-                    # h_state = tensors[0].cpu() * enc.attention_mask.unsqueeze(-1).cpu()   # (B, L, 1)
-                    # print(tensors[0].shape)
-                    # token_counts = enc.attention_mask.cpu().sum(dim=1).clamp(min=1)  # (B, 1), to prevent divide-by-zero
-                    # token_counts = token_counts.unsqueeze(1)
-                    # h_state = h_state[:,-1, :] #.sum(dim=1) / token_counts  # (B, HD)
-                    # h_state = h_state.sum(dim=1) / token_counts  # (B, HD)
-                    # token_counts = mask.sum(dim=1, keepdim=True).clamp(min=1)    # (B, 1)
-                    # print(h_state.shape)
-                    # seq_avg = (tensors[0].cpu() * mask.cpu()).sum(dim=1) / token_counts.cpu()
-                    all_hidden[layer].append(h_state)
-
-                    del tensors[:], h_state #, token_counts
-                    gc.collect()
-                    torch.cuda.empty_cache()
-
-                # id_ += 1
-                # all_logits.append(out.logits[:, -1, :].cpu())
-                # all_masks.append(enc.attention_mask.cpu())
-
-                print(f"Generated {len(chunk)} responses.")
-
-
-            return all_hidden #all_logits, all_masks, 
-
-        # all_logits, all_masks, 
-        all_hidden = _inner()
-
-    # L_max = max(t.size(1) for t in all_masks)
-    # logits = torch.cat([F.pad(t, (0, 0, 0, L_max - t.size(1)))
-    #                     for t in all_logits], dim=0)
-    # masks  = torch.cat([F.pad(t, (0, L_max - t.size(1)))
-    #                     for t in all_masks], dim=0)
-    # max_len = max(m.shape[1] for m in all_masks)
-
-    
-
-    # pad masks on the left of the seq dimension
-    # padded_masks = [
-    #     F.pad(mask, (max_len - mask.size(1), 0))
-    #     for mask in all_masks
-    # ]
-
-    # padded_states = {}
-    # for layer, states in acts.items():
-    #         padded_states[layer] = [
-    #             F.pad(h, (0, 0, max_len - h.size(1), 0))
-    #             for h in states
-            # ]
-    # all_logits = torch.cat(all_logits, dim=0)       # [total_examples, max_len, vocab]
-    # padded_masks  = torch.cat(padded_masks,  dim=0)       # [total_examples, max_len]
-    # states_tensor = {
-    #     layer: torch.cat(h_list, dim=0)                   # [total_examples, max_len, hid_dim]
-    #     for layer, h_list in padded_states.items()
-    # }  
-    all_hidden = {layer: torch.cat(h_list, dim=0) for layer, h_list in all_hidden.items()}
-    print(all_hidden[list(all_hidden.keys())[0]].shape)
-    # return all_logits, padded_masks, all_hidden
-    return all_hidden  # all_logits, padded_masks, all_hidden
-
+    return prompts, responses_chosen, responses_refused
 
 
 def parse_args():
     p = argparse.ArgumentParser("Evaluate LLM for harmful behavior on HarmBench.")
     p.add_argument("--model", default="google/gemma-2-2b") # meta-llama/Llama-3.1-8B, google/gemma-2-2b-it, meta-llama/Llama-3.2-3B-Instruct, meta-llama/Llama-3.2-3B, google/gemma-7b
-    p.add_argument("--cls_model", default="cais/HarmBench-Llama-2-13b-cls") #cais/HarmBench-Llama-2-13b-cls, cais/HarmBench-Mistral-7b-val-cls
-
+    p.add_argument("--model_use", default="w4r10ck/SOLAR-10.7B-Instruct-v1.0-uncensored")
+    p.add_argument("--cls_model", default="cais/HarmBench-Mistral-7b-val-cls") #cais/HarmBench-Llama-2-13b-cls, cais/HarmBench-Mistral-7b-val-cls
+    p.add_argument("--dataset", default="unalignment/toxic-dpo-v0.2") #"unalignment/toxic-dpo-v0.2", walledai/HarmBench
     p.add_argument(
         "--behavior",
         type=str,
@@ -328,7 +126,7 @@ def parse_args():
     p.add_argument("--max_new_tokens", type=int, default=256)
     p.add_argument("--temperature", type=float, default=0.7)
     p.add_argument("--top_p", type=float, default=0.9)
-    p.add_argument("--batch_size", type=int, default=64)
+    p.add_argument("--batch_size", type=int, default=16)
     p.add_argument("--do_sample", action="store_true")
     p.add_argument(
         "--base_model", action="store_true", help="Skip chat template wrapping"
@@ -346,12 +144,10 @@ def parse_args():
     return p.parse_args()
 
 
-def main():
-    args = parse_args()
-
+def main(args):
     
 
-    model, tokenizer = load_model_and_tokenizer(args.model, bnb_config=args.bnb_config, output_hidden_states=False)
+    model, tokenizer = load_model_and_tokenizer(args.model, device, bnb_config=None)#, output_hidden_states=False)
     pad_token_id = tokenizer.pad_token_id  # Save this for later use
 
     template = None
@@ -363,104 +159,128 @@ def main():
         )
         print("Using template", template["description"])
 
-    print("Loading the HarmBench dataset")
-    dataset = load_dataset("walledai/HarmBench", "standard")["train"]
-    count = min(args.num_prompts, len(dataset))
-    prompts = [ex["prompt"] for ex in dataset.select(range(count))]
-    print(f"Loaded {len(prompts)} prompts from HarmBench dataset.")
+    
 
     safe_model_name = re.sub(r'[\\/*?:"<>|]', "_", args.model)
-    os.makedirs(f"{args.output_dir}/{safe_model_name}", exist_ok=True)
 
-    save_path = os.path.join(args.output_dir, safe_model_name)
+    save_path = os.path.join(args.output_dir, safe_model_name, "linear_probes")
+    os.makedirs(save_path, exist_ok=True)
 
-    all_states = run_prompting(
+    # print("Loading the unalignment/toxic-dpo-v0.2 dataset")
+    # dataset = load_dataset("unalignment/toxic-dpo-v0.2")["train"]
+    # prompts = dataset["prompt"]
+    # responses = dataset["chosen"]
+    # refuse_responses = dataset["rejected"]
+
+    prompts, responses, refuse_responses = get_dataset(args.dataset)
+
+
+    print(f"Loaded {len(prompts)} prompts from unalignment/toxic-dpo-v0.2 dataset.")
+
+    all_hidden_sum, all_hidden_last, all_hidden = run_prompting(
         model,
         tokenizer,
         prompts,
+        responses,
         base_model=args.base_model,
-        max_new_tokens=args.max_new_tokens,
-        do_sample=args.do_sample,
-        temperature=args.temperature,
-        top_p=args.top_p,
         starting_batch_size=args.batch_size,
         template=template,
-        output_dir=save_path, # Temporary directory to store intermediate results
+        atten=False,
+        aggregate=None, # or sum
+    )
+        
+    print(f"Saving results to {save_path}")
+
+    if args.dataset == "walledai/HarmBench":
+        safe_dataset = re.sub(r'[\\/*?:"<>|]', "_", args.dataset)
+        save_safetensors(
+            all_hidden_sum,
+            os.path.join(save_path, f"hidden_states_gen_sum_answer_{safe_dataset}.safetensors"),
+        )
+
+        save_safetensors(
+            all_hidden_last,
+            os.path.join(save_path, f"hidden_states_gen_last_answer_{safe_dataset}.safetensors"),
+        )
+
+        save_safetensors(
+            all_hidden,
+            os.path.join(save_path, f"hidden_states_gen_answer_{safe_dataset}.safetensors"),
+        )
+
+    else:
+        save_safetensors(
+            all_hidden_sum,
+            os.path.join(save_path, f"hidden_states_gen_sum_answer.safetensors"),
+        )
+
+        save_safetensors(
+            all_hidden_last,
+            os.path.join(save_path, f"hidden_states_gen_last_answer.safetensors"),
+        )
+
+        save_safetensors(
+            all_hidden,
+            os.path.join(save_path, f"hidden_states_gen_answer.safetensors"),
+        )
+
+    all_hidden_sum, all_hidden_last, all_hidden = run_prompting(
+        model,
+        tokenizer,
+        prompts,
+        refuse_responses,
+        base_model=args.base_model,
+        starting_batch_size=args.batch_size,
+        template=template,
+        atten=False,
+        aggregate=None, # or sum
     )
     # print(f"Generated {len(responses)} responses.")
     del model, tokenizer
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
-
     
     print(f"Saving results to {save_path}")
-    # print(f"Logits shape: {all_logits.shape}")
-    # print(f"Attention masks shape: {all_masks.shape}")
-    # print(f"Hidden states shape: {list(all_states.keys())}")
-    # save_res = {
-    #     "logits_before": all_logits,
-    # }
-    # save_safetensors(
-    #     save_res,
-    #     os.path.join(save_path, f"logits_before.safetensors"),
-    # )
 
-    # save_res = {
-    #     "attn_masks": all_masks,
-    # }
-    # save_safetensors(
-    #     save_res,
-    #     os.path.join(save_path, f"attention_mask.safetensors"),
-    # )
-   
-    save_safetensors(
-        all_states,
-        os.path.join(save_path, f"hidden_states_gen.safetensors"),
-    )
+    if args.dataset == "walledai/HarmBench":
+        safe_dataset = re.sub(r'[\\/*?:"<>|]', "_", args.dataset)
+        save_safetensors(
+            all_hidden_sum,
+            os.path.join(save_path, f"hidden_states_gen_sum_refusal_{safe_dataset}.safetensors"),
+        )
 
-    
+        save_safetensors(
+            all_hidden_last,
+            os.path.join(save_path, f"hidden_states_gen_last_refusal_{safe_dataset}.safetensors"),
+        )
 
-        
+        save_safetensors(
+            all_hidden,
+            os.path.join(save_path, f"hidden_states_gen_refusal_{safe_dataset}.safetensors"),
+        )
+
+    else:
+        save_safetensors(
+            all_hidden_sum,
+            os.path.join(save_path, f"hidden_states_gen_sum_refusal.safetensors"),
+        )
+
+        save_safetensors(
+            all_hidden_last,
+            os.path.join(save_path, f"hidden_states_gen_last_refusal.safetensors"),
+        )
+
+        save_safetensors(
+            all_hidden,
+            os.path.join(save_path, f"hidden_states_gen_refusal.safetensors"),
+        )
 
 
 if __name__ == "__main__":
-    main()
-
-# def parse_args():
-#     p = argparse.ArgumentParser("Dump activations for HarmBench prompts.")
-#     p.add_argument("--model", default="google/gemma-2-2b")
-#     p.add_argument("--num_prompts", type=int, default=300)
-#     p.add_argument("--output_dir", default="./activations")
-#     p.add_argument("--batch_size", type=int, default=64)
-#     p.add_argument("--bnb", action="store_true",
-#                    help="load model in 8-bit (bits-and-bytes)")
-#     return p.parse_args()
-
-# def main():
-#     args   = parse_args()
-#     model, tok = load_model_and_tokenizer(args.model, args.bnb)
-
-#     dataset  = load_dataset("walledai/HarmBench", "standard")["train"]
-#     prompts  = [ex["prompt"] for ex in dataset.select(range(args.num_prompts))]
-#     print(f"Running {len(prompts)} prompts…")
-
-#     logits, masks, states = run_prompting(model, tok, prompts, args.batch_size)
-
-#     safe_name = re.sub(r'[\\/*?:"<>|]', "_", args.model)
-#     out_dir   = os.path.join(args.output_dir, safe_name)
-#     os.makedirs(out_dir, exist_ok=True)
-
-#     save_safetensors({"logits_before": logits}, os.path.join(out_dir, "logits_before.safetensors"))
-#     save_safetensors({"attn_masks": masks},     os.path.join(out_dir, "attention_mask.safetensors"))
-#     save_safetensors(states,                   os.path.join(out_dir, "hidden_states_pure.safetensors"))
-#     print("✓ Saved tensors to", out_dir)
-
-#     # clean-up
-#     del model, tok, logits, masks, states
-#     gc.collect()
-#     if torch.cuda.is_available():
-#         torch.cuda.empty_cache()
-
-# if __name__ == "__main__":
-#     main()
+    args = parse_args()
+    for model in ["Qwen/Qwen2.5-3B"]:#google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct", "allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct"]: #"google/gemma-2-2b", "meta-llama/Llama-3.2-3B"]:
+        args.model = model
+        args.dataset = "unalignment/toxic-dpo-v0.2" #"walledai/HarmBench" #
+        print(f"Processing model {model}")
+        main(args)

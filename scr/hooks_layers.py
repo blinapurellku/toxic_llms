@@ -1,12 +1,8 @@
 
 import argparse
 import gc
-import json
 import os
 import re
-from collections import defaultdict
-from contextlib import contextmanager
-from typing import Dict, List, Optional, Tuple, Union
 
 # Set environment variables to disable various optimizations
 os.environ["TORCHINDUCTOR_DISABLE"] = "1"
@@ -15,16 +11,12 @@ os.environ["TORCHDYNAMO_DISABLE"] = "1"
 os.environ["DISABLE_TORCH_COMPILE"] = "1"
 os.environ["TRANSFORMERS_NO_COMPILE"] = "1"
 
-import pandas as pd
 import torch
-import torch.nn.functional as F
-from accelerate.utils import find_executable_batch_size
-from datasets import load_dataset
 from safetensors.torch import save_file as save_safetensors
-from utils_templates import LLAMA_CLS_PROMPT, get_template
-from tqdm import tqdm
-from transformers import (AutoModelForCausalLM, AutoTokenizer,
-                          BitsAndBytesConfig)
+from utils_templates import get_template
+from transformers import (BitsAndBytesConfig)
+from utils_load_dataset_and_models import load_model_and_tokenizer, load_dataset, classify_models_dict
+from generate_responses import run_prompting
 
 # ────────────────────────────────────────────────────────── constants ──
 TORCH_DT = torch.bfloat16
@@ -53,267 +45,13 @@ bnb_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.
 
 
 
-def _derive_layer_names(model) -> List[str]:
-    """Return a list of *attribute paths* for each hidden‑state slot.
 
-    The list length == ``num_hidden_layers + 1`` (extra slot 0 for embeddings).
-
-    Examples
-    --------
-    * Llama‑family → ``[embeddings, 'model.model.layers.0', …]``
-    * GPT‑2/GPT‑J   → ``[embeddings, 'transformer.h.0', …]``
-
-    If the exact container list cannot be detected, we fall back to
-    `'layer_{i}'` so the code still runs.
-    """
-
-    # 1) Common decoder‑only HF models: <top>.model.layers (Llama, Gemma, …)
-    if hasattr(model, "model") and hasattr(model.model, "layers"):
-        n = len(model.model.layers)
-        return ["embeddings"] + [f"model.model.layers.{i}" for i in range(n)]
-
-    # 2) GPT‑style: <top>.transformer.h
-    if hasattr(model, "transformer") and hasattr(model.transformer, "h"):
-        n = len(model.transformer.h)
-        return ["embeddings"] + [f"transformer.h.{i}" for i in range(n)]
-
-    # 3) Fallback – numeric names
-    n = getattr(model.config, "num_hidden_layers", None)
-    if n is None:
-        raise ValueError("Could not determine transformer block count.")
-    return ["embeddings"] + [f"layer_{i}" for i in range(n)]
-
-def load_model_and_tokenizer(
-    model_name: str,
-    bnb_config: bool = True,
-    output_hidden_states: bool = True,
-):
-    """Load model + tokenizer so hidden states are *always* produced."""
-
-   
-    tokenizer = AutoTokenizer.from_pretrained(model_name, padding_side="left", truncation_side="left")
-    tokenizer.pad_token = tokenizer.pad_token or tokenizer.eos_token
-
-    if bnb_config:
-        bnb_config = BitsAndBytesConfig(load_in_8bit=True, bnb_8bit_compute_dtype=torch.bfloat16)
-
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            # torch_dtype=torch.bfloat16,
-            quantization_config=bnb_config,
-            device_map=device, #"auto",
-            output_hidden_states=output_hidden_states,  # Enable hidden states output
-        ).eval()
-    else:
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            torch_dtype=torch.bfloat16,
-            device_map=device,  # "auto",
-            output_hidden_states=output_hidden_states,  # Enable hidden states output
-        ).eval()
-
-
-    model.config.pad_token_id = tokenizer.pad_token_id
-    # model.config.output_hidden_states = output_hidden_states  # Enable hidden states output
-    return model, tokenizer
-
-
-@contextmanager
-def capture_all_layers(model,
-                       move_to_cpu: bool = True,
-                       pad_and_concat: bool = False,
-                       atten: bool = False):
-    """
-    Record post-block residual streams for *all* decoder layers.
-
-    Yields
-    ------
-    store : dict[str, list[Tensor] | Tensor]
-        While inside the `with`-block a list[Tensor] accumulates per layer.
-        On exit, lists are optionally left as-is (*pad_and_concat=False*)
-        or left-padded to the layer’s max sequence length and concatenated
-        into a single tensor (*pad_and_concat=True*).
-    """
-    store, handles = defaultdict(list), []
-
-    def _factory(name):
-        def _hook(_m, _inp, out):
-            h = out[0] if isinstance(out, tuple) else out      # (B,L,H)
-            h = h.detach().cpu()
-            # if move_to_cpu:
-            #     h = h.to("cpu", non_blocking=True)
-            store[name].append(h.bfloat16())
-            print(store[name][-1].shape)
-            return out
-        return _hook
-    
-    if hasattr(model, "model") and hasattr(model.model, "layers"):
-        n = len(model.model.layers)
-        layers = [f"model.layers.{i}" for i in range(n)]
-        if atten:
-            layers = [f"model.layers.{i}.self_attn" for i in range(n)]
-        print(f"Detected {n} layers: {layers}")
-
-    # 2) GPT‑style: <top>.transformer.h
-    elif hasattr(model, "transformer") and hasattr(model.transformer, "h"):
-        n = len(model.transformer.h)
-        layers =  [f"transformer.h.{i}" for i in range(n)]
-        if atten:
-            layers = [f"transformer.h.{i}.attn" for i in range(n)]
-        print(f"Detected {n} layers: {layers}")
-
-    # 3) Fallback – numeric names
-    # else:
-    #     n = getattr(model.config, "num_hidden_layers", None)
-    #     if n is None:
-    #         raise ValueError("Could not determine transformer block count.")
-    #     layeres =  [f"layer_{i}" for i in range(n)]
-
-    print(f"Detected {len(layers)} layers: {layers}")
-    for n, m in model.named_modules():
-        if (n.startswith("model.layers.") and n in layers):   # old typo variant
-                  # GPT style
-            print(f"Registering hook for {n}")
-            handles.append(m.register_forward_hook(_factory(n)))
-        elif n.startswith("transformer.h.") and n in layers:
-            print(f"Registering hook for {n}")
-            handles.append(m.register_forward_hook(_factory(n)))
-
-    # for n, m in model.named_modules():
-    #     if n.startswith("model.model.layers.") or n.startswith("transformer.h."):
-    #         handles.append(m.register_forward_hook(_factory(n)))
-
-    try:
-        yield store
-    finally:
-        for h in handles:
-            h.remove()
-
-        
-
-@torch.no_grad()
-def run_prompting(
-    model,
-    tokenizer,
-    prompts,
-    base_model: bool = False,
-    template: dict | None = None,
-    starting_batch_size: int = 64,
-    atten: bool = False,
-    aggregate: str = None,
-    tmp_dir: str = "./tmp",
-):
-    """Generate logits **and** hidden states for *prompts* with auto‑batch‑size."""
-
-    run_kwargs = {
-        "pad_token_id": tokenizer.pad_token_id,
-        # "output_hidden_states": True,
-    }
-    # layer_names = _derive_layer_names(model)[1:]
-    with capture_all_layers(model, move_to_cpu=True, atten=atten) as acts:
-        @find_executable_batch_size(starting_batch_size=starting_batch_size)
-        def _inner(bs):
-            all_logits, all_masks = [], []
-            all_hidden = defaultdict(list)  # Store hidden states    
-            id_ = 0
-            for i in tqdm(range(0, len(prompts), bs), desc=f"Generating (bs={bs})"):
-                chunk = prompts[i : i + bs]
-                if base_model:
-                    wrapped = chunk
-                else:
-                    if template is None:
-                        raise ValueError(
-                            "A chat template must be supplied when base_model=False"
-                        )
-                    wrapped = [template["prompt"].format(instruction=p) for p in chunk]
-
-                # enc = tokenizer(chunk, return_tensors="pt", padding=True).to(model.device)
-                enc = tokenizer(
-                    wrapped, return_tensors="pt", padding=True, truncation=True
-                ).to(model.device)
-                # model.config.num_attention_heads
-                with torch.inference_mode():
-                    out = model(**enc, **run_kwargs)
-                    # print(acts)
-                for layer, tensors in acts.items():
-                    h_state = tensors[0].cpu() * enc.attention_mask.unsqueeze(-1).cpu()   # (B, L, 1)
-                    # print(tensors[0].shape)
-                    if atten: 
-                        H = model.config.num_attention_heads
-                        B, L, _ = h_state.shape
-                        h_state = h_state.view(B, L, H, -1).permute(0, 2, 1, 3)  # (B, H, L, HD)
-
-                        if aggregate == "sum":
-                            token_counts = enc.attention_mask.cpu().sum(dim=1).clamp(min=1)
-                            token_counts = token_counts.unsqueeze(1).unsqueeze(1)  # (B, 1, 1)
-                            h_state = h_state.sum(dim=2) / token_counts  # (B, H, HD)
-                        else:
-                            h_state = h_state[:, :, -1, :]
-                            print(layer, h_state.shape)
-                    else:
-                        if aggregate == "sum":
-                            token_counts = enc.attention_mask.cpu().sum(dim=1).clamp(min=1)  # (B, 1), to prevent divide-by-zero
-                            token_counts = token_counts.unsqueeze(1)
-                            h_state = h_state.sum(dim=1) / token_counts  # (B, HD)
-                        else:
-                            h_state = h_state[:, -1, :]   # (B, HD)
-
-                    # token_counts = mask.sum(dim=1, keepdim=True).clamp(min=1)    # (B, 1)
-                    # print(h_state.shape)
-                    # seq_avg = (tensors[0].cpu() * mask.cpu()).sum(dim=1) / token_counts.cpu()
-                    all_hidden[layer].append(h_state)
-
-                    del tensors[:], h_state #, token_counts
-                    gc.collect()
-                    torch.cuda.empty_cache()
-
-                id_ += 1
-                all_logits.append(out.logits[:, -1, :].cpu())
-                all_masks.append(enc.attention_mask.cpu())
-
-                print(f"Generated {len(chunk)} responses.")
-
-
-            return all_logits, all_masks, all_hidden
-
-        all_logits, all_masks, all_hidden = _inner()
-
-    # L_max = max(t.size(1) for t in all_masks)
-    # logits = torch.cat([F.pad(t, (0, 0, 0, L_max - t.size(1)))
-    #                     for t in all_logits], dim=0)
-    # masks  = torch.cat([F.pad(t, (0, L_max - t.size(1)))
-    #                     for t in all_masks], dim=0)
-    max_len = max(m.shape[1] for m in all_masks)
-
-    
-
-    # pad masks on the left of the seq dimension
-    padded_masks = [
-        F.pad(mask, (max_len - mask.size(1), 0))
-        for mask in all_masks
-    ]
-
-    # padded_states = {}
-    # for layer, states in acts.items():
-    #         padded_states[layer] = [
-    #             F.pad(h, (0, 0, max_len - h.size(1), 0))
-    #             for h in states
-            # ]
-    all_logits = torch.cat(all_logits, dim=0)       # [total_examples, max_len, vocab]
-    padded_masks  = torch.cat(padded_masks,  dim=0)       # [total_examples, max_len]
-    # states_tensor = {
-    #     layer: torch.cat(h_list, dim=0)                   # [total_examples, max_len, hid_dim]
-    #     for layer, h_list in padded_states.items()
-    # }  
-    all_hidden = {layer: torch.cat(h_list, dim=0) for layer, h_list in all_hidden.items()}
-    print(all_hidden[list(all_hidden.keys())[0]].shape)
-    return all_logits, padded_masks, all_hidden
 
 
 
 def parse_args():
     p = argparse.ArgumentParser("Evaluate LLM for harmful behavior on HarmBench.")
-    p.add_argument("--model", default="meta-llama/Llama-3.2-3B") # meta-llama/Llama-3.1-8B, google/gemma-2-2b-it, meta-llama/Llama-3.2-3B-Instruct, meta-llama/Llama-3.2-3B, google/gemma-7b
+    p.add_argument("--model", default="allenai/OLMo-2-0425-1B") #"allenai/OLMo-2-0425-1B", google/gemma-2-2b-it, meta-llama/Llama-3.2-3B-Instruct, meta-llama/Llama-3.2-3B, google/gemma-7b
     p.add_argument("--cls_model", default="cais/HarmBench-Llama-2-13b-cls") #cais/HarmBench-Llama-2-13b-cls, cais/HarmBench-Mistral-7b-val-cls
     p.add_argument("--atten", action="store_true",
                         help="Capture attention weights instead of hidden states")
@@ -346,12 +84,22 @@ def parse_args():
     return p.parse_args()
 
 
-def main():
-    args = parse_args()
+def main(args):
+    # args = parse_args()
     atten = args.atten
     
+    if args.bnb_config:
+        bnb_config_1 = BitsAndBytesConfig(load_in_8bit=True, bnb_8bit_compute_dtype=torch.bfloat16)
+    else:
+        bnb_config_1 = None
 
-    model, tokenizer = load_model_and_tokenizer(args.model, bnb_config=args.bnb_config, output_hidden_states=False)
+
+    safe_dataset = re.sub(r'[\\/*?:"<>|]', "_", args.dataset)
+    safe_model_name = re.sub(r'[\\/*?:"<>|]', "_", args.model)
+    cls_name = classify_models_dict[args.dataset] if args.dataset in classify_models_dict else None
+
+
+    model, tokenizer = load_model_and_tokenizer(args.model, device, bnb_config=args.bnb_config)
     pad_token_id = tokenizer.pad_token_id  # Save this for later use
 
     template = None
@@ -363,18 +111,13 @@ def main():
         )
         print("Using template", template["description"])
 
-    print("Loading the HarmBench dataset")
-    dataset = load_dataset("walledai/HarmBench", "standard")["train"]
-    count = min(args.num_prompts, len(dataset))
-    prompts = [ex["prompt"] for ex in dataset.select(range(count))]
-    print(f"Loaded {len(prompts)} prompts from HarmBench dataset.")
+    print("Loading dataset", args.dataset)
+    prompts = load_dataset(args.dataset)  # to verify it's available
+    data = args.dataset # toxigen/toxigen-data
+    print(f"Loaded dataset {data} with {len(prompts)} items.")
 
-    safe_model_name = re.sub(r'[\\/*?:"<>|]', "_", args.model)
-    os.makedirs(f"{args.output_dir}/{safe_model_name}", exist_ok=True)
-
-    save_path = os.path.join(args.output_dir, safe_model_name)
-
-    all_logits, all_masks, all_states = run_prompting(
+    
+    all_logits, all_masks, all_states, all_states_s = run_prompting(
         model,
         tokenizer,
         prompts,
@@ -383,7 +126,7 @@ def main():
         starting_batch_size=args.batch_size,
         atten=atten,
         aggregate=None, # "sum" or None (gets the last token)
-        tmp_dir=save_path,  # Temporary directory to store intermediate results
+        tmp_dir=None #save_path,  # Temporary directory to store intermediate results
     )
     # print(f"Generated {len(responses)} responses.")
     del model, tokenizer
@@ -391,7 +134,11 @@ def main():
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-    
+
+    os.makedirs(f"{args.output_dir}/{safe_model_name}", exist_ok=True)
+
+    save_path = os.path.join(args.output_dir, safe_model_name)
+
     print(f"Saving results to {save_path}")
     print(f"Logits shape: {all_logits.shape}")
     print(f"Attention masks shape: {all_masks.shape}")
@@ -400,7 +147,12 @@ def main():
     if atten:
         save_safetensors(
         all_states,
-        os.path.join(save_path, f"attention_state_pure.safetensors"),
+        os.path.join(save_path, f"attention_states_pure.safetensors"),
+        )
+
+        save_safetensors(
+            all_states_s,
+            os.path.join(save_path, f"attention_states_sum_pure.safetensors"),
         )
 
     else:
@@ -425,48 +177,31 @@ def main():
             os.path.join(save_path, f"hidden_states_pure.safetensors"),
         )
 
+        save_safetensors(
+            all_states_s,
+            os.path.join(save_path, f"hidden_states_sum_pure.safetensors"),
+        )
+
     
 # model.layers.0.self_attn
         
 
 
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+    # args.model = "Qwen/Qwen2.5-3B" #"Qwen/Qwen2.5-3B"
+    # models = ["allenai/OLMo-2-0425-1B", "google/gemma-2-2b", "meta-llama/Llama-3.2-3B"] #["allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct"] #"allenai/OLMo-2-0425-1B"
+    models = ["allenai/OLMo-2-0425-1B-Instruct", "google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct"]
+    args.dataset = "walledai/HarmBench"
+    args.cls_model = "cais/HarmBench-Mistral-7b-val-cl"
+    args.output_dir = "/data/erblina/Master_thesis"
+    for model in models:
+        args.model=model
+        main(args)
+    # # models = ["allenai/OLMo-2-0425-1B-Instruct", "google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct"]
 
-# def parse_args():
-#     p = argparse.ArgumentParser("Dump activations for HarmBench prompts.")
-#     p.add_argument("--model", default="google/gemma-2-2b")
-#     p.add_argument("--num_prompts", type=int, default=300)
-#     p.add_argument("--output_dir", default="./activations")
-#     p.add_argument("--batch_size", type=int, default=64)
-#     p.add_argument("--bnb", action="store_true",
-#                    help="load model in 8-bit (bits-and-bytes)")
-#     return p.parse_args()
-
-# def main():
-#     args   = parse_args()
-#     model, tok = load_model_and_tokenizer(args.model, args.bnb)
-
-#     dataset  = load_dataset("walledai/HarmBench", "standard")["train"]
-#     prompts  = [ex["prompt"] for ex in dataset.select(range(args.num_prompts))]
-#     print(f"Running {len(prompts)} prompts…")
-
-#     logits, masks, states = run_prompting(model, tok, prompts, args.batch_size)
-
-#     safe_name = re.sub(r'[\\/*?:"<>|]', "_", args.model)
-#     out_dir   = os.path.join(args.output_dir, safe_name)
-#     os.makedirs(out_dir, exist_ok=True)
-
-#     save_safetensors({"logits_before": logits}, os.path.join(out_dir, "logits_before.safetensors"))
-#     save_safetensors({"attn_masks": masks},     os.path.join(out_dir, "attention_mask.safetensors"))
-#     save_safetensors(states,                   os.path.join(out_dir, "hidden_states_pure.safetensors"))
-#     print("✓ Saved tensors to", out_dir)
-
-#     # clean-up
-#     del model, tok, logits, masks, states
-#     gc.collect()
-#     if torch.cuda.is_available():
-#         torch.cuda.empty_cache()
-
-# if __name__ == "__main__":
-#     main()
+    # # for model in models:
+    # for model in models:
+    #     args.model=model
+    #     main(args)
+    # # main()
