@@ -19,7 +19,6 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 from accelerate.utils import find_executable_batch_size
-from datasets import load_dataset
 from safetensors.torch import save_file as save_safetensors
 from utils_templates import LLAMA_CLS_PROMPT, get_template
 from tqdm import tqdm

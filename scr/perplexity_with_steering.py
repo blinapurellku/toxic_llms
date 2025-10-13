@@ -24,13 +24,14 @@ torch.set_float32_matmul_precision("high")
 import numpy as np
 import pandas as pd
 from accelerate.utils import find_executable_batch_size
-from datasets import load_dataset
 from safetensors.torch import save_file as save_safetensors
-from templates import LLAMA_CLS_PROMPT, get_template
+from utils_templates import LLAMA_CLS_PROMPT, get_template
 from tqdm import tqdm
 from transformers import (AutoModelForCausalLM, AutoTokenizer,
                           BitsAndBytesConfig)
 import math
+from utils_load_dataset_and_models import load_dataset, load_model_and_tokenizer
+from utils_hooks import steering_vector_hook
 
 
 # Optional: avoid error spam from Torch Dynamo
@@ -47,70 +48,6 @@ if torch.cuda.is_available():
 # torch.use_deterministic_algorithms(True)
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
-# BitsAndBytesConfig for 8-bit quantization
-# bnb_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16)
-
-
-
-def load_model_and_tokenizer(model_name: str, base_model: bool = False, bnb_config: Optional[BitsAndBytesConfig] = None):
-    print(f"Loading model: {model_name}")
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_name, padding_side="left", truncation_side="left"
-    )
-    if bnb_config is not None:
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            torch_dtype=torch.bfloat16,
-            quantization_config=bnb_config,
-            device_map=device, #"auto",
-        ).eval()
-    else:
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            torch_dtype=torch.bfloat16,
-            device_map=device,  # "auto",
-        ).eval()
-
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    model.config.pad_token_id = tokenizer.pad_token_id
-
-    return model, tokenizer
-
-
-def steering_vector_hook(
-    module: torch.nn.Module,
-    steer: torch.Tensor, 
-    alpha: float = 1.0, 
-) -> torch.utils.hooks.RemovableHandle:
-    """
-    Register a forward‐hook on `module` that adds `steer` to its output.
-    Returns the hook handle so you can remove it later.
-    """
-    steer = steer.detach()
-    def _hook(_mod, _inp, out):
-        # Handle HF blocks that return tuples (hidden, present, …)
-        tgt = out[0] if isinstance(out, tuple) else out  # (B, L, H)
-
-        # Broadcast if steer is 1‑D
-        add = steer
-        if steer.ndim == 1:
-            add = steer.unsqueeze(0).unsqueeze(0)  # (1, 1, H)
-        add = add.to(tgt.device)
-
-        # if ATTN_MASK is not None:
-        #     # ATTN_MASK: shape (B, L) → (B, L, 1)
-        #     expanded_mask = ATTN_MASK.unsqueeze(-1).to(tgt.device)  # (B, L, 1)
-        #     add = add * expanded_mask  # (B, L, H) mask-aware addition
-
-        mod = tgt + alpha * add
-        return (mod,) + out[1:] if isinstance(out, tuple) else mod
-        
-    return module.register_forward_hook(_hook)
-
-
 
 
 
@@ -214,6 +151,7 @@ def parse_args():
     p = argparse.ArgumentParser("Evaluate LLM for harmful behavior on HarmBench.")
     p.add_argument("--model", default="google/gemma-2-2b") # meta-llama/Llama-3.1-8B, google/gemma-2-2b-it, meta-llama/Llama-3.2-3B-Instruct, meta-llama/Llama-3.2-3B, google/gemma-7b
     p.add_argument("--cls_model", default="cais/HarmBench-Mistral-7b-val-cls") #cais/HarmBench-Llama-2-13b-cls, cais/HarmBench-Mistral-7b-val-cls
+    p.add_argument("--dataset", type=str, default="walledai/HarmBench")
     p.add_argument(
         "--steer_layer",
         type=str,
@@ -258,7 +196,7 @@ def main(args):
     else:
         bnb_config_1 = None
 
-    model, tokenizer = load_model_and_tokenizer(args.model, args.base_model, bnb_config=bnb_config_1)
+    model, tokenizer = load_model_and_tokenizer(args.model, device, args.base_model, bnb_config=bnb_config_1)
     pad_token_id = tokenizer.pad_token_id  # Save this for later use
 
     template = None
@@ -270,11 +208,7 @@ def main(args):
         )
         print("Using template", template["description"])
 
-    print("Loading the HarmBench dataset")
-    dataset = load_dataset("walledai/HarmBench", "standard")["train"]
-    count = min(args.num_prompts, len(dataset))
-    prompts = [ex["prompt"] for ex in dataset.select(range(count))]
-    print(f"Loaded {len(prompts)} prompts from HarmBench dataset.")
+    prompts = load_dataset(args.dataset) 
 
     base_perplexity = perplexity_prompts(model, tokenizer, prompts, template, base_model=args.base_model, starting_bs=args.batch_size)
 
