@@ -50,6 +50,51 @@ def load_prompts_responses(output_dir, model, dataset, layer_name, alpha):
     return prompts, responses
 
 
+def save_prompts_responses_head(output_dir, model, dataset, layer_name, alpha, prompts, responses, ablation=True):
+    safe_model = safe_name(model)
+    folder = os.path.join(output_dir, safe_model)
+    os.makedirs(folder, exist_ok=True)
+    if dataset is not None:
+        layer_name = f"{dataset}__{layer_name}"
+        
+    if ablation:    
+        filename = f"{layer_name}__head_{alpha}_ablate.json.zst"
+    else:
+        filename = f"{layer_name}__head_{alpha}_mean.json.zst"
+    path = os.path.join(folder, filename)
+
+    obj = {
+        "prompts": prompts,
+        "responses": responses
+    }
+    raw = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+
+    cctx = zstd.ZstdCompressor(level=9)
+    with open(path, "wb") as f:
+        f.write(cctx.compress(raw))
+
+    print(f"Saved {len(prompts)} prompts/responses to {path}")
+
+def load_prompts_responses_head(output_dir, model, dataset, layer_name, alpha, ablation=True):
+    safe_model = safe_name(model)
+    folder = os.path.join(output_dir, safe_model)
+    if dataset is not None:
+        layer_name = f"{dataset}__{layer_name}"
+    if ablation:    
+        filename = f"{layer_name}__head_{alpha}_ablate.json.zst"
+    else:
+        filename = f"{layer_name}__head_{alpha}_mean.json.zst"
+    path = os.path.join(folder, filename)
+
+    dctx = zstd.ZstdDecompressor()
+    with open(path, "rb") as f:
+        data = dctx.decompress(f.read())
+    obj = json.loads(data.decode("utf-8"))
+
+    prompts = obj["prompts"]
+    responses = obj["responses"]
+    return prompts, responses
+
 
 
 def _safe(s: str) -> str:
