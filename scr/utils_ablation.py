@@ -92,8 +92,11 @@ def get_ablation_heads(safe_model_name, output_dir, tox_dir='pca', n=20):
             # head_diff = F.normalize(head_diff, dim=-1)  # unit vectors
             signed_scores = head_diff @ tox_axis  # cosine similarity with tox_axis
         
-        elif tox_dir== 'cosine_diff':
+        elif tox_dir== 'cosine_tox':
             signed_scores = F.cosine_similarity(toxic_behaviour, overall_mean, dim=-1) #[num_heads]
+        
+        elif tox_dir== 'cosine_diff':
+            signed_scores = F.cosine_similarity(head_diff, overall_mean, dim=-1) #[num_heads]
         
         elif tox_dir == 'cosine':
             sign = toxic_behaviour.norm(dim=-1) - non_toxic_behaviour.norm(dim=-1)

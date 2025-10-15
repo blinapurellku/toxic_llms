@@ -123,7 +123,7 @@ def main(args):
     print('Loading dataset ', safe_dataset)
     prompts = load_dataset(args.dataset)  # 
 
-    fil= 'cosine'  # 'pca' 'mean_head' 'diff' 'cosine'
+    fil= 'cosine_tox'  # 'pca' 'mean_head' 'diff' 'cosine', 'cosine_diff
     top_n = args.top_n
     all_heads, amplify_tox, mitigate_tox, _ = get_ablation_heads(safe_model_name, args.output_dir, tox_dir=fil, n=top_n)
 
