@@ -322,8 +322,8 @@ def main(args):
                 print(f"Generated {len(filtered_prompts)} valid responses out of {len(prompts)} prompts.")
                 print(f"Generated {len(filtered_responses)} valid responses out of {len(responses)} total responses.")
                 # layer_name = 'all_layers'  # Use a single key for all layers
-                responses_after[layer_name][head_id] = filtered_responses
-                prompts_after[layer_name][head_id] = filtered_prompts
+                responses_after[mode] = filtered_responses
+                prompts_after[mode] = filtered_prompts
 
                 # Save the prompts and responses
                 save_prompts_responses_head(args.output_dir, args.model, data, layer_name, head_id, filtered_prompts, filtered_responses, ablation=ablate)
