@@ -66,7 +66,8 @@ def get_ablation_heads(safe_model_name, output_dir, tox_dir='pca', n=20):
     for layer_name in list(atten_tensors.keys()):
         if layer_name not in layer_heads:
             layer_heads[layer_name] = {}
-        
+
+        overall_mean = atten_tensors[layer_name].float().mean(dim=0)
         toxic_behaviour = atten_tensors[layer_name][labels_before==1].float().mean(dim=0)  # (num_heads, head_dim)
         non_toxic_behaviour = atten_tensors[layer_name][labels_before==0].float().mean(dim=0)  # (num_heads, head_dim)
         head_diff = toxic_behaviour - non_toxic_behaviour  # (num_heads, head_dim)
@@ -78,6 +79,7 @@ def get_ablation_heads(safe_model_name, output_dir, tox_dir='pca', n=20):
             tox_axis = F.normalize(tox_axis, dim=0)          # unit vector
             # head_diff = F.normalize(head_diff, dim=-1)  # unit vectors
             signed_scores = head_diff @ tox_axis  # cosine similarity with tox_axis
+       
         elif tox_dir == "mean_head": 
             tox_axis = head_diff.mean(dim=0)  # (head_dim,)
             tox_axis = F.normalize(tox_axis, dim=0)          # unit vector
@@ -89,6 +91,9 @@ def get_ablation_heads(safe_model_name, output_dir, tox_dir='pca', n=20):
             tox_axis = F.normalize(tox_axis, dim=0)          # unit vector
             # head_diff = F.normalize(head_diff, dim=-1)  # unit vectors
             signed_scores = head_diff @ tox_axis  # cosine similarity with tox_axis
+        
+        elif tox_dir== 'cosine_diff':
+            signed_scores = F.cosine_similarity(toxic_behaviour, overall_mean, dim=-1) #[num_heads]
         
         elif tox_dir == 'cosine':
             sign = toxic_behaviour.norm(dim=-1) - non_toxic_behaviour.norm(dim=-1)
@@ -112,7 +117,7 @@ def get_ablation_heads(safe_model_name, output_dir, tox_dir='pca', n=20):
         layer_heads[layer_name]['mitigate'] = mitigate
         layer_heads[layer_name]['tox_axis'] = toxic_behaviour
         layer_heads[layer_name]['nontox_axis'] = non_toxic_behaviour
-        layer_heads[layer_name]['overall'] = atten_tensors[layer_name].float().mean(dim=0)
+        layer_heads[layer_name]['overall'] = overall_mean
         layer_heads[layer_name]['scores'] = signed_scores
         
         head_diff_norms = torch.linalg.norm(head_diff, dim=-1) # (num_heads,)
