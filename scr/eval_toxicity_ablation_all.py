@@ -34,7 +34,7 @@ from utils_evaluating_toxicity import classify_generation
 from utils_load_dataset_and_models import load_model_and_tokenizer, load_classifier, load_dataset, classify_models_dict
 from generate_responses import generate_responses
 from utils_hooks import steering_vector_hook, ablation_hook, register_head_ablation
-
+from utils_ablation import get_ablation_heads
 # Optional: avoid error spam from Torch Dynamo
 torch._dynamo.config.suppress_errors = False
 
@@ -49,104 +49,6 @@ if torch.cuda.is_available():
 # torch.use_deterministic_algorithms(True)
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
-def get_ablation_head(safe_model_name, output_dir, tox_dir='pca', n=20):
-    save_path = os.path.join(output_dir, safe_model_name)
-    atten_tensors = load_safetensors(
-            os.path.join(save_path, f"attention_states_pure.safetensors")
-        )
-    
-    labels_before = np.load(f"{args.output_dir}/{safe_model_name}/labels.npy")
-    layer_heads = {}
-    all_head_data = []
-    for layer_name in list(atten_tensors.keys()):
-        if layer_name not in layer_heads:
-            layer_heads[layer_name] = {}
-        
-        toxic_behaviour = atten_tensors[layer_name][labels_before==1].float().mean(dim=0)  # (num_heads, head_dim)
-        non_toxic_behaviour = atten_tensors[layer_name][labels_before==0].float().mean(dim=0)  # (num_heads, head_dim)
-        head_diff = toxic_behaviour - non_toxic_behaviour  # (num_heads, head_dim)
-        if tox_dir == "pca":
-            # First principal direction of head_diff (no centering to preserve sign convention)
-            _, _, V = torch.pca_lowrank(head_diff, q=1, center=False)
-            # _,_, V = torch.pca_lowrank(toxic_behaviour, q=1, center=False)
-            tox_axis = V[:, 0]     
-        else: 
-            tox_axis = head_diff.mean(dim=0)  # (head_dim,)
-        
-        tox_axis = F.normalize(tox_axis, dim=0)          # unit vector
-        # head_diff = F.normalize(head_diff, dim=-1)  # unit vectors
-        signed_scores = head_diff @ tox_axis  # cosine similarity with tox_axis
-        
-        amp_idx = torch.nonzero(signed_scores > 0, as_tuple=False).squeeze(1)
-        mit_idx = torch.nonzero(signed_scores < 0, as_tuple=False).squeeze(1)
-
-        amplify = amp_idx[torch.argsort(signed_scores[amp_idx], descending=True)[:5]].tolist()
-        mitigate = mit_idx[torch.argsort(signed_scores[mit_idx])[:5]].tolist()  # most negative first
-
-        layer_heads[layer_name]['amplify'] = amplify
-        layer_heads[layer_name]['mitigate'] = mitigate
-        layer_heads[layer_name]['tox_axis'] = toxic_behaviour
-        layer_heads[layer_name]['nontox_axis'] = non_toxic_behaviour
-        layer_heads[layer_name]['overall'] = atten_tensors[layer_name].float().mean(dim=0)
-        layer_heads[layer_name]['scores'] = signed_scores
-        
-        head_diff_norms = torch.linalg.norm(head_diff, dim=-1) # (num_heads,)
-
-        for head_id, score in enumerate(signed_scores):
-            all_head_data.append({
-                'layer': layer_name,
-                'head_id': head_id,
-                'score': score.item(),
-                'diff': head_diff_norms.max().item(),
-                })
-
-    all_scores = torch.tensor([d['score'] for d in all_head_data])
-    all_layers = [d['layer'] for d in all_head_data]
-    all_head_ids = [d['head_id'] for d in all_head_data]
-
-    all_diffs = torch.tensor([d['diff'] for d in all_head_data])
-
-    all_diff_s = torch.sort(all_diffs, descending=True)
-
-    top_k_amp_values, top_k_amp_indices = torch.topk(all_scores, k=min(n, len(all_scores)), largest=True)
-
-    top_k_mit_values, top_k_mit_indices = torch.topk(all_scores, k=min(n, len(all_scores)), largest=False)
-
-    
-    amplify_heads = {}
-    mitigate_heads = {}
-    all_heads = {}
-    # Process Amplify Heads
-    for idx in top_k_amp_indices.tolist():
-        layer_name = all_layers[idx]
-        head_id = all_head_ids[idx]
-        if layer_name not in amplify_heads:
-            amplify_heads[layer_name] = []
-        if layer_name not in all_heads:
-            all_heads[layer_name] = []
-        all_heads[layer_name].append(head_id)
-        amplify_heads[layer_name].append(head_id)
-
-    # Process Mitigate Heads
-    for idx in top_k_mit_indices.tolist():
-        layer_name = all_layers[idx]
-        head_id = all_head_ids[idx]
-        if layer_name not in mitigate_heads:
-            mitigate_heads[layer_name] = []
-        if layer_name not in all_heads:
-            all_heads[layer_name] = []
-        all_heads[layer_name].append(head_id)
-        mitigate_heads[layer_name].append(head_id)
-
-    print("Top amplify heads:", amplify_heads)
-    print("Top mitigate heads:", mitigate_heads)
-
-    return all_heads, amplify_heads, mitigate_heads, layer_heads
-
-
-
-
 
         
    
@@ -218,9 +120,9 @@ def main(args):
     print('Loading dataset ', safe_dataset)
     prompts = load_dataset(args.dataset)  # 
 
-    fil= 'pca'
+    fil= 'mean' #'pca'
     top_n = 8
-    all_heads, amplify_tox, mitigate_tox, _ = get_ablation_head(safe_model_name, args.output_dir, tox_dir=fil, n=top_n)
+    all_heads, amplify_tox, mitigate_tox, _ = get_ablation_heads(safe_model_name, args.output_dir, tox_dir=fil, n=top_n)
 
     name2mod = {n: m for n, m in model.named_modules()}
     ablate=True
@@ -249,6 +151,7 @@ def main(args):
         else:
             print(f"Filling heads to {mode} toxicity...")
             spec = mitigate_tox if mode == 'mitigate' else amplify_tox
+
 
         metadata = {
             "model": args.model,

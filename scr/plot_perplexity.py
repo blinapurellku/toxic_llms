@@ -26,7 +26,6 @@ import pandas as pd
 from accelerate.utils import find_executable_batch_size
 from datasets import load_dataset
 from safetensors.torch import save_file as save_safetensors
-from templates import LLAMA_CLS_PROMPT, get_template
 from tqdm import tqdm
 from transformers import (AutoModelForCausalLM, AutoTokenizer,
                           BitsAndBytesConfig)
@@ -257,6 +256,7 @@ def main(args):
     save_dir = os.path.join(args.output_dir, safe_model_name)
     # Load JSON
     with open(os.path.join(save_dir, "steered_perplexities.json")) as f:
+    # with open(os.path.join(save_dir, "abladed_perplexities_pca.json")) as f:
         perplexities = json.load(f)
 
     with open(os.path.join(save_dir, "base_perplexity.json")) as f:
