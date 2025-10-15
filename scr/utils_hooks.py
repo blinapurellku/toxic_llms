@@ -2,8 +2,7 @@ from ast import mod
 import os
 from collections import defaultdict
 from contextlib import contextmanager
-from typing import Dict, List, Optional, Tuple, Union
-
+from typing import Dict, List, Optional, Tuple, Union, Iterable
 import torch
 
 os.environ["TORCHINDUCTOR_DISABLE"] = "1"
@@ -45,20 +44,20 @@ def steering_vector_hook(
     steer = steer.detach()
     def _hook(_m, _inp, out):
         # Handle HF blocks that return tuples (hidden, present, …)
-        tgt = out[0] if isinstance(out, tuple) else out  # (B, L, H)
+        x = out[0] if isinstance(out, tuple) else out  # (B, L, H)
 
         # Broadcast if steer is 1‑D
         add = steer
         if steer.ndim == 1:
             add = steer.unsqueeze(0).unsqueeze(0)  # (1, 1, H)
-        add = add.to(tgt.device)
+        add = add.to(x.device)
 
         # if ATTN_MASK is not None:
         #     # ATTN_MASK: shape (B, L) → (B, L, 1)
-        #     expanded_mask = ATTN_MASK.unsqueeze(-1).to(tgt.device)  # (B, L, 1)
+        #     expanded_mask = ATTN_MASK.unsqueeze(-1).to(x.device)  # (B, L, 1)
         #     add = add * expanded_mask  # (B, L, H) mask-aware addition
 
-        mod = tgt + alpha * add
+        mod = x + alpha * add
         return (mod,) + out[1:] if isinstance(out, tuple) else mod
         
     return module.register_forward_hook(_hook)
@@ -70,32 +69,115 @@ def ablation_hook(
     head: int = -1,
     num_head: int = 8, # head number of the layer
     ablate: bool = True,
-    s_mean : Optional[torch.Tensor] = None,
+    fill : Optional[torch.Tensor] = None,
 ) -> torch.utils.hooks.RemovableHandle:
     """
     Register a forward pre‐hook on `module` that zeroes out specific indices in its output.
     Returns the hook handle so you can remove it later.
     """
     # s_mean = s_mean.detach()
-    s_mean = s_mean.detach() if isinstance(s_mean, torch.Tensor) else None
+    fill = fill.detach() if isinstance(fill, torch.Tensor) else None
 
     def _hook(_m, inp):
         # Handle HF blocks that return tuples (hidden, present, …)
-        tgt = inp[0] if isinstance(inp, tuple) else inp  # (B, L, H)
-        B, L, _ = tgt.shape
-        tgt = tgt.reshape(B, L, num_head, -1)  # (B, L, num_heads, head_dim)
-        _, _, _, head_dim = tgt.shape
+        x = inp[0] if isinstance(inp, tuple) else inp  # (B, L, H)
+        B, L, _ = x.shape
+        x = x.view(B, L, num_head, -1)  # (B, L, num_heads, head_dim)
+        _, _, _, head_dim = x.shape
         if ablate:
-            tgt[:, :, head, :].zero_()  # (B, L, H)
+            x[:, :, head, :].zero_()  # (B, L, head_dim)
         else:
-            s_mean = s_mean.to(dtype=tgt.dtype, device=tgt.device)
-            tgt[:, :, head, :] = s_mean.unsqueeze(1).expand(B, tgt.size(1), head_dim)  # (B, L, H)
+            fill = fill.to(dtype=x.dtype, device=x.device) # (head_dim)
+            x[:, :, head, :] = fill.view(1, 1, -1).expand(x.size(0), x.size(1), -1)  # (B, L, head_dim)
         
-        tgt = tgt.reshape(B, L, -1)  # (B, L, H)
+        x = x.view(B, L, -1).contiguous()  # (B, L, H)
 
-        return (tgt,)+ inp[1:] if isinstance(inp, tuple) else tgt
+        return (x,)+ inp[1:] if isinstance(inp, tuple) else x
         
     return module.register_forward_pre_hook(_hook)
+
+
+
+
+@torch.no_grad()
+def register_head_ablation(
+    model: torch.nn.Module,
+    spec: Dict[str, Iterable[int]],
+    *,
+    ablate: bool=True, #str = "zero",                   # "zero" or "fill"
+    fill: Optional[torch.Tensor] = None,  # (head_dim,) or (num_heads_to_fill, head_dim)
+) -> List[torch.utils.hooks.RemovableHandle]:
+    """
+    Register forward pre-hooks on *named* o_proj modules to ablate specific heads.
+
+    Args:
+        model: your model.
+        spec:  {"model.layers.9.self_attn.o_proj": [1, 3, 5], ...}
+        mode:  "zero" → zero the specified heads,
+               "fill" → replace with fill_vec.
+        fill_vec: replacement vector(s), same logic as before.
+
+    Returns:
+        List of hook handles you can remove later.
+    """
+
+    handles = []
+
+    def make_hook(num_heads: int, heads: Iterable[int], fill: Optional[torch.Tensor]):
+        heads = torch.tensor(sorted(set(heads)), dtype=torch.long)
+
+        # if fill is not None:
+        #     if fill.dim() == 1:
+        #         fill_local = fill.view(1, head_dim).expand(heads.numel(), head_dim).contiguous()
+        #     elif fill.dim() == 2:
+        #         assert fill.size(0) == heads.numel() and fill.size(1) == head_dim, \
+        #             f"fill_vec must be (head_dim,) or ({heads.numel()}, {head_dim})."
+        #         fill_local = fill.contiguous()
+        #     else:
+        #         raise ValueError("fill_vec must be 1D or 2D.")
+        # else:
+        #     fill_local = None
+        fill = fill.detach() if isinstance(fill, torch.Tensor) else None
+
+        def _hook(_m, inp):
+            x = inp[0] if isinstance(inp, tuple) else inp  # (B, L, n_heads * head_dim)
+            B, L, D = x.shape
+           
+
+            x = x.view(B, L, num_heads, -1)
+            _,_,_, head_dim = x.shape # (B, L, n_heads, head_dim)
+
+            if ablate: #mode == "zero":
+                x.index_fill_(dim=2, index=heads.to(x.device), value=0.0)
+            else:
+                fill = fill.to(dtype=x.dtype, device=x.device) # (H, head_dim)
+                for idx, h in enumerate(heads.tolist()):
+                    # fill_local = fill[h].view(1,1,-1).expand(x.size(0), x.size(1), -1) # (B, L, head_dim)
+                    x[:, :, h, :] = fill[h].view(1,1,-1).expand(x.size(0), x.size(1), -1) # (B, L, head_dim) fill_local
+            # else:
+            #     raise ValueError("mode must be 'zero' or 'fill'.")
+
+            x = x.view(B, L, -1).contiguous() # (B, L, H)
+            return (x,) + inp[1:] if isinstance(inp, tuple) else x
+
+        return _hook
+
+    for name, heads in spec.items():
+        module = dict(model.named_modules()).get(name)
+        if module is None:
+            raise KeyError(f"Module '{name}' not found in model.named_modules()")
+
+        # Infer number of heads and head_dim from its parent attention module
+        # (works for LLaMA-style naming: self_attn.o_proj)
+        parent_name = name.rsplit('.', 1)[0]
+        parent = dict(model.named_modules()).get(parent_name)
+        num_heads = model.config.num_attention_heads #getattr(parent, "num_heads")
+
+        hook = make_hook(num_heads, heads, fill)
+        handles.append(module.register_forward_pre_hook(hook))
+        print(f"✅ Hook registered on {name} for heads {heads}")
+
+    return handles
 
 
 @contextmanager

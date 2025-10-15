@@ -282,8 +282,8 @@ def main(args):
                 filtered_prompts, filtered_responses = load_prompts_responses_head(args.output_dir, args.model, data, layer_name, head_id, ablation=ablate)
                 print(f"Generated {len(filtered_prompts)} valid responses out of {len(filtered_prompts)} prompts.")
                 print(f"Generated {len(filtered_responses)} valid responses out of {len(filtered_responses)} total responses.")
-                responses_after[layer_name] = filtered_responses
-                prompts_after[layer_name] = filtered_prompts
+                responses_after[layer_name][head_id] = filtered_responses
+                prompts_after[layer_name][head_id] = filtered_prompts
 
             else:
 
@@ -363,7 +363,7 @@ def main(args):
     cls_model, cls_tokenizer, cls_template, cls_name = load_classifier(args.dataset, device, bnb_config=bnb_config_2)
     
     for layer_name in list(responses_after.keys()):
-        for head_id in list(responses_after[layer_name].keys()):   
+        for head_id, responses in responses_after[layer_name].items():
 
             if args.dataset in "walledai/HarmBench":
                 if ablate:
@@ -386,29 +386,28 @@ def main(args):
                 labels_after = {}
 
 
-                for layer_name, responses in responses_after.items():
-                    cls_results = classify_generation(
-                            prompts_after[layer_name],
-                            responses,
-                            cls_model,
-                            cls_tokenizer,
-                            cls_name,
-                            args.behavior,
-                            templ=cls_template,
-                            batch_size=args.batch_size,  #
-                        )
-                    print(f"Classified {len(cls_results)} responses.")
-                    # Average label for quick numeric overview
-                    valid_lab = [r for r in cls_results if r != -1]
-                    avg_label = sum(valid_lab) / len(cls_results)
-                    print(f"Layer {layer_name} classification results:")
-                    print(f"Mean toxicity label: {avg_label:.3f}, {sum(valid_lab)}/{len(cls_results)} toxic responses")
-                    # labels_after[layer_name] = np.array(cls_results)
-                    labels_after ={
-                            "layer_name": layer_name,
-                            "head_id": head_id,
-                            "labels": np.array(cls_results),
-                        }
+                cls_results = classify_generation(
+                        prompts_after[layer_name][head_id],
+                        responses,
+                        cls_model,
+                        cls_tokenizer,
+                        cls_name,
+                        args.behavior,
+                        templ=cls_template,
+                        batch_size=args.batch_size,  #
+                    )
+                print(f"Classified {len(cls_results)} responses.")
+                # Average label for quick numeric overview
+                valid_lab = [r for r in cls_results if r != -1]
+                avg_label = sum(valid_lab) / len(cls_results)
+                print(f"Layer {layer_name} classification results:")
+                print(f"Mean toxicity label: {avg_label:.3f}, {sum(valid_lab)}/{len(cls_results)} toxic responses")
+                # labels_after[layer_name] = np.array(cls_results)
+                labels_after ={
+                        "layer_name": layer_name,
+                        "head_id": head_id,
+                        "labels": np.array(cls_results),
+                    }
                     
                 
                 
