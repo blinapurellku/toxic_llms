@@ -64,6 +64,7 @@ def parse_args():
     p.add_argument("--cls_model", default="cais/HarmBench-Llama-2-13b-cls") #cais/HarmBench-Llama-2-13b-cls, cais/HarmBench-Mistral-7b-val-cls
     p.add_argument("--atten", action="store_true",
                         help="Capture attention weights instead of hidden states")
+    p.add_argument("--dataset", type=str, default="walledai/HarmBench") #walledai/HarmBench, toxigen/toxigen-data
     p.add_argument(
         "--behavior",
         type=str,
@@ -75,7 +76,7 @@ def parse_args():
     p.add_argument("--max_new_tokens", type=int, default=256)
     p.add_argument("--temperature", type=float, default=0.7)
     p.add_argument("--top_p", type=float, default=0.9)
-    p.add_argument("--batch_size", type=int, default=64)
+    p.add_argument("--batch_size", type=int, default=128)
     p.add_argument("--do_sample", action="store_true")
     p.add_argument(
         "--base_model", action="store_true", help="Skip chat template wrapping"
@@ -152,44 +153,79 @@ def main(args):
     print(f"Logits shape: {all_logits.shape}")
     print(f"Attention masks shape: {all_masks.shape}")
     # print(f"Hidden states shape: {list(all_states.keys())}")
+    if args.dataset == "walledai/HarmBench":
 
-    if atten:
-        save_safetensors(
-        all_states,
-        os.path.join(save_path, f"attention_states_pure.safetensors"),
-        )
-
-        save_safetensors(
-            all_states_s,
-            os.path.join(save_path, f"attention_states_sum_pure.safetensors"),
-        )
-
-    else:
-        save_res = {
-            "logits_before": all_logits,
-        }
-        save_safetensors(
-            save_res,
-            os.path.join(save_path, f"logits_before.safetensors"),
-        )
-
-        save_res = {
-            "attn_masks": all_masks,
-        }
-        save_safetensors(
-            save_res,
-            os.path.join(save_path, f"attention_mask.safetensors"),
-        )
-    
-        save_safetensors(
+        if atten:
+            save_safetensors(
             all_states,
-            os.path.join(save_path, f"hidden_states_pure.safetensors"),
-        )
+            os.path.join(save_path, f"attention_states_pure.safetensors"),
+            )
 
-        save_safetensors(
-            all_states_s,
-            os.path.join(save_path, f"hidden_states_sum_pure.safetensors"),
-        )
+            save_safetensors(
+                all_states_s,
+                os.path.join(save_path, f"attention_states_sum_pure.safetensors"),
+            )
+
+        else:
+            save_res = {
+                "logits_before": all_logits,
+            }
+            save_safetensors(
+                save_res,
+                os.path.join(save_path, f"logits_before.safetensors"),
+            )
+
+            save_res = {
+                "attn_masks": all_masks,
+            }
+            save_safetensors(
+                save_res,
+                os.path.join(save_path, f"attention_mask.safetensors"),
+            )
+        
+            save_safetensors(
+                all_states,
+                os.path.join(save_path, f"hidden_states_pure.safetensors"),
+            )
+
+            save_safetensors(
+                all_states_s,
+                os.path.join(save_path, f"hidden_states_sum_pure.safetensors"),
+            )
+    
+    else:
+        safe_dataset = re.sub(r'[\\/*?:"<>|]', "_", args.dataset)
+
+        if atten:
+            save_safetensors(
+            all_states,
+            os.path.join(save_path, f"{safe_dataset}_attention_states_pure.safetensors"),
+            )
+
+            save_safetensors(
+                all_states_s,
+                os.path.join(save_path, f"{safe_dataset}_attention_states_sum_pure.safetensors"),
+            )
+
+        else:
+           
+            save_res = {
+                "attn_masks": all_masks,
+            }
+            save_safetensors(
+                save_res,
+                os.path.join(save_path, f"{safe_dataset}_attention_mask.safetensors"),
+            )
+        
+            save_safetensors(
+                all_states,
+                os.path.join(save_path, f"{safe_dataset}_hidden_states_pure.safetensors"),
+            )
+
+            save_safetensors(
+                all_states_s,
+                os.path.join(save_path, f"{safe_dataset}_hidden_states_sum_pure.safetensors"),
+            )
 
     
 # model.layers.0.self_attn
@@ -200,13 +236,15 @@ if __name__ == "__main__":
     args = parse_args()
     # args.model = "Qwen/Qwen2.5-3B" #"Qwen/Qwen2.5-3B"
     # models = ["allenai/OLMo-2-0425-1B", "google/gemma-2-2b", "meta-llama/Llama-3.2-3B"] #["allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct"] #"allenai/OLMo-2-0425-1B"
-    models = ["allenai/OLMo-2-0425-1B-Instruct", "google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct"]
-    args.dataset = "walledai/HarmBench"
-    args.cls_model = "cais/HarmBench-Mistral-7b-val-cl"
-    args.output_dir = "/data/erblina/Master_thesis"
+    models = [ "meta-llama/Llama-3.2-3B-Instruct", "Qwen/Qwen2.5-3B-Instruct"] # "allenai/OLMo-2-0425-1B-Instruct", "google/gemma-2-2b-it"]
+    datasets = ["walledai/AdvBench","walledai/DTStereotype", "walledai/CatHarmfulQA","walledai/DTToxicity", "truthfulqa/truthful_qa"]
+                 # 
     for model in models:
+        
         args.model=model
-        main(args)
+        for dataset in datasets:
+            args.dataset=dataset
+            main(args)
     # # models = ["allenai/OLMo-2-0425-1B-Instruct", "google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct"]
 
     # # for model in models:

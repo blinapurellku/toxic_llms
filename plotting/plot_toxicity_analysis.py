@@ -227,6 +227,222 @@ def plot_steering_results(
     plt.show()
     plt.close(fig)
 
+import os, re
+import numpy as np
+from textwrap import wrap
+import matplotlib.pyplot as plt
+
+def plot_steering_deltas(
+    layers,
+    res_harmbench,
+    res_d,
+    ds1_name,
+    ds2_names,
+    safe_model_name,
+    *,
+    bar_width=0.18,
+    group_gap=0.85,
+    show_values=True,
+    ylim=None,                 # if None, auto-symmetric around 0
+    dpi=300,
+    savepath=None
+):
+    """
+    Plot grouped *delta* bars for multiple layers.
+    Baseline (alpha=0) is drawn as a reference line at 0.
+    For each dataset group, we plot:
+        Δ_neg = avg_tox(α_neg) - avg_tox(0)
+        Δ_pos = avg_tox(α_pos) - avg_tox(0)
+
+    Parameters are the same shape as your original function.
+    """
+
+    n_layers = len(layers)
+    n_groups = 1 + len(ds2_names)       # HarmBench + others
+    conditions = ["neg", "pos"]
+
+    # Colors & labels
+    colors = {
+        "neg": "#27AE60",  # green
+        "pos": "#EB5757",  # red
+    }
+    legend_labels = {
+        "neg": r"$\alpha_{neg}$ vs base",
+        "pos": r"$\alpha_{pos}$ vs base",
+    }
+
+    # Figure
+    fig, axes = plt.subplots(
+        1, n_layers, figsize=(min(5 * n_layers, 20), 5.0),
+        sharey=True, constrained_layout=True
+    )
+    if n_layers == 1:
+        axes = [axes]
+
+    # Utility: robustly pick neg/pos alpha keys for a layer dict
+    def _alpha_keys(layer_dict):
+        keys = list(layer_dict.keys())
+
+        def is_zero_key(k):
+            if isinstance(k, (int, float)) and k == 0.0: return True
+            if isinstance(k, str) and k.strip() in {"0", "0.0"}: return True
+            return False
+
+        def as_float(x):
+            try:
+                return float(x)
+            except Exception:
+                return np.nan
+
+        nonbase = [k for k in keys if not is_zero_key(k)]
+        floats = np.array([as_float(k) for k in nonbase], dtype=float)
+        if len(floats) == 0:
+            # Fall back: no neg/pos provided
+            return 0.0, None, None, "0.0", "?", "?"
+
+        neg_val = floats[np.argmin(floats)] if np.any(floats < 0) else floats.min()
+        pos_val = floats[np.argmax(floats)] if np.any(floats > 0) else floats.max()
+
+        def original_key_for(val):
+            for k in keys:
+                try:
+                    if abs(float(k) - float(val)) < 1e-9:
+                        return k
+                except Exception:
+                    pass
+            return val  # best-effort
+        neg_key = original_key_for(neg_val)
+        pos_key = original_key_for(pos_val)
+        return 0.0, neg_key, pos_key, "0.0", str(neg_key), str(pos_key)
+
+    # group positions & offsets (just two bars now)
+    x_group_centers = np.arange(n_groups) * group_gap
+    offsets = {
+        "neg": -bar_width/2,
+        "pos": +bar_width/2
+    }
+
+    def _short_name(name):
+        return re.split(r'[\\/]', name)[-1]
+
+    # Gather all deltas to auto-scale y if requested
+    all_deltas = []
+
+    # Precompute per-layer deltas to also help compute ylim
+    per_layer_data = {}  # layer -> dict(cond)->list of deltas (by group order)
+    per_layer_labels = {}  # layer -> (neg_str, pos_str)
+
+    for layer in layers:
+        base_key, neg_key, pos_key, base_str, neg_str, pos_str = _alpha_keys(res_harmbench[layer])
+
+        group_labels = [_short_name(ds1_name)] + [_short_name(ds) for ds in ds2_names]
+        deltas = {"neg": [], "pos": []}
+
+        # HarmBench deltas
+        hb = res_harmbench[layer]
+        base = hb[base_key if base_key in hb else 0.0]
+        d_neg = hb[neg_key] - base if neg_key is not None else np.nan
+        d_pos = hb[pos_key] - base if pos_key is not None else np.nan
+        deltas["neg"].append(d_neg)
+        deltas["pos"].append(d_pos)
+
+        # Other datasets deltas
+        for ds in ds2_names:
+            ddict = res_d[ds][layer]
+            base_ds = ddict[base_key if base_key in ddict else 0.0]
+            d_neg_ds = ddict[neg_key] - base_ds if neg_key is not None else np.nan
+            d_pos_ds = ddict[pos_key] - base_ds if pos_key is not None else np.nan
+            deltas["neg"].append(d_neg_ds)
+            deltas["pos"].append(d_pos_ds)
+
+        # collect for scaling
+        for c in conditions:
+            all_deltas.extend([v for v in deltas[c] if np.isfinite(v)])
+
+        per_layer_data[layer] = (group_labels, deltas)
+        per_layer_labels[layer] = (neg_str, pos_str)
+
+    # If ylim not provided, make it symmetric around 0 with a small headroom
+    if ylim is None:
+        if len(all_deltas) == 0:
+            yabs = 0.1
+        else:
+            yabs = max(abs(np.nanmin(all_deltas)), abs(np.nanmax(all_deltas)))
+        pad = max(0.02, 0.08 * yabs)
+        ylim = (-yabs - pad, yabs + pad)
+
+    # Plot
+    for ax, layer in zip(axes, layers):
+        group_labels, deltas = per_layer_data[layer]
+        neg_str, pos_str = per_layer_labels[layer]
+
+        # bars
+        for cond in conditions:
+            xs = x_group_centers + offsets[cond]
+            bars = ax.bar(
+                xs, deltas[cond], width=bar_width,
+                color=colors[cond],
+                label=legend_labels[cond] if layer == layers[0] else None,
+                edgecolor="white", linewidth=0.6
+            )
+            if show_values:
+                for b in bars:
+                    h = b.get_height()
+                    if not np.isfinite(h): continue
+                    ax.text(
+                        b.get_x() + b.get_width()/2,
+                        h + (0.012 if h >= 0 else -0.012),
+                        f"{h:+.2f}",
+                        ha="center",
+                        va="bottom" if h >= 0 else "top",
+                        fontsize=6
+                    )
+
+        # zero line = base reference
+        ax.axhline(0.0, color="#2F80ED", linestyle="--", linewidth=1.2, alpha=0.9)
+
+        # style
+        ax.set_ylim(*ylim)
+        ax.set_xticks(x_group_centers)
+        ax.set_xticklabels(
+            ["\n".join(wrap(lbl, 14)) for lbl in group_labels],
+            rotation=45, fontsize=9
+        )
+        ax.grid(axis="y", linestyle="--", alpha=0.35, linewidth=0.7)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.spines["left"].set_alpha(0.4)
+        ax.spines["bottom"].set_alpha(0.4)
+        ax.tick_params(axis="x", length=0)
+
+        ax.set_title(
+            f"Layer {layer}\n($\\alpha_{{neg}}={neg_str}$, $\\alpha_{{pos}}={pos_str}$)",
+            fontsize=12
+        )
+
+    axes[0].set_ylabel("Δ Average Toxicity vs Base", fontsize=12)
+
+    fig.suptitle(
+        f"Toxicity Shift vs Base for {safe_model_name.replace('_','-')}",
+        fontsize=14, y=1.02
+    )
+
+    handles, labels = axes[0].get_legend_handles_labels()
+    if handles:
+        fig.legend(handles, labels, loc="upper left", bbox_to_anchor=(1.005, 1.0),
+                   frameon=False, fontsize=11)
+
+    # Save
+    if savepath is None:
+        os.makedirs(f"/home/fe/purelku/Desktop/Master_thesis/results_steering_datasets/{safe_model_name}", exist_ok=True)
+        savepath = f"/home/fe/purelku/Desktop/Master_thesis/results_steering_datasets/{safe_model_name}/steering_toxicity_deltas_{safe_model_name}_datasets_2"
+
+    fig.savefig(f"{savepath}.png", dpi=dpi, bbox_inches="tight")
+    fig.savefig(f"{savepath}.svg", format="svg", bbox_inches="tight", dpi=dpi)
+
+    plt.show()
+    plt.close(fig)
+
 
 def parse_args():
     p = argparse.ArgumentParser("Evaluate LLM for harmful behavior on HarmBench.")
@@ -370,7 +586,7 @@ def main(args):
     # --- Plotting Function ---
     ds1_name = "walledai/HarmBench"
     ds2_name = args.dataset
-    plot_steering_results(layers, res_harmbench, res_d, ds1_name, ds2_name, safe_model_name)
+    plot_steering_deltas(layers, res_harmbench, res_d, ds1_name, ds2_name, safe_model_name)
 
    
 

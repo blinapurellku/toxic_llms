@@ -103,8 +103,8 @@ def main(args):
     # all_p = {}
     res['mitigate'] = []
     res['amplify'] = []
-    fil ='cosine' # 'pca' or 'mean_head' or 'diff', 'cosine
-    for a in range(1, 20): 
+    fil ='dis_mean' # 'pca' or 'mean_head' or 'diff', 'cosine_diff, cosine
+    for a in range(5, 15): 
 
         layer_name = "all_layers"
         head_id = f"mitigate_top_k_{a}"  #
@@ -228,8 +228,8 @@ def main(args):
 
 
 if __name__ == "__main__":
-    for i, model in enumerate(["Qwen/Qwen2.5-3B-Instruct","Qwen/Qwen2.5-3B", "allenai/OLMo-2-0425-1B-Instruct", "allenai/OLMo-2-0425-1B",
-         "google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct", "google/gemma-2-2b", "meta-llama/Llama-3.2-3B"]): #"google/gemma-2-2b-it",
+    for i, model in enumerate(["allenai/OLMo-2-0425-1B-Instruct", "allenai/OLMo-2-0425-1B","Qwen/Qwen2.5-3B-Instruct","Qwen/Qwen2.5-3B",
+         "google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct", "google/gemma-2-2b", "meta-llama/Llama-3.2-3B"]): #"Qwen/Qwen2.5-3B-Instruct","Qwen/Qwen2.5-3B", 
     # for i, model in enumerate(["Qwen/Qwen2.5-3B-Instruct"]):#, "Qwen/Qwen2.5-3B-Instruct"]):
         args = parse_args()
         args.model = model
