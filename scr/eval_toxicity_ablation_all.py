@@ -91,6 +91,7 @@ def parse_args():
     )
     p.add_argument("--system_message", type=str, default=None,
                    help="System message for the chat template, if applicable")
+    p.add_argument("--fil", type=str, default="cosine", help="fil for ablation: cosine, cosine_mean, cosine_tox, ")
     return p.parse_args()
 
 
@@ -123,7 +124,7 @@ def main(args):
     print('Loading dataset ', safe_dataset)
     prompts = load_dataset(args.dataset)  # 
 
-    fil= 'dis_mean'  # 'pca' 'mean_head' 'diff' 'cosine', 'cosine_diff, dis_mean
+    fil= args.fil  # 'pca' 'mean_head' 'diff' 'cosine', 'cosine_diff, dis_mean
     top_n = args.top_n
     all_heads, amplify_tox, mitigate_tox, _ = get_ablation_heads(safe_model_name, args.output_dir, tox_dir=fil, n=top_n)
 
