@@ -1,16 +1,10 @@
 import argparse
-import datetime
-import gc
 import json
 import os
 import re
-import time
-from typing import Dict, List, Optional, Tuple, Union
 
 from matplotlib import cm, pyplot as plt
 import torch
-import torch.nn.functional as F
-from sql_helper import load_prompts_responses, save_prompts_responses
 
 os.environ["TORCHINDUCTOR_DISABLE"] = "1"
 os.environ["TORCH_COMPILE"] = "0"
@@ -22,14 +16,6 @@ torch.set_float32_matmul_precision("high")
 
 
 import numpy as np
-import pandas as pd
-from accelerate.utils import find_executable_batch_size
-from datasets import load_dataset
-from safetensors.torch import save_file as save_safetensors
-from tqdm import tqdm
-from transformers import (AutoModelForCausalLM, AutoTokenizer,
-                          BitsAndBytesConfig)
-import math
 
 
 # Optional: avoid error spam from Torch Dynamo
