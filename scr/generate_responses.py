@@ -17,6 +17,8 @@ torch.set_float32_matmul_precision("high")
 
 from accelerate.utils import find_executable_batch_size
 from tqdm import tqdm
+from utils_hooks import capture_all_layers
+
 
 # Optional: avoid error spam from Torch Dynamo
 torch._dynamo.config.suppress_errors = False
@@ -149,7 +151,7 @@ def run_prompting(
             all_logits, all_masks = [], []
             all_hidden = defaultdict(list)  # Store hidden states    
             all_hidden_sum = defaultdict(list)  # Store hidden states
-            id_ = 0
+            # try:
             for i in tqdm(range(0, len(prompts), bs), desc=f"Generating (bs={bs})"):
                 
                 chunk = prompts[i : i + bs]
@@ -167,47 +169,56 @@ def run_prompting(
                     wrapped, return_tensors="pt", padding=True, truncation=True
                 ).to(model.device)
                 # model.config.num_attention_heads
-                with torch.inference_mode():
-                    out = model(**enc, **run_kwargs)
-                    # print(acts)
-                for layer, tensors in acts.items():
-                    h_state = tensors[0].cpu() * enc.attention_mask.unsqueeze(-1).cpu()   # (B, L, 1)
-                    # print(tensors[0].shape)
-                    if atten: 
-                        H = model.config.num_attention_heads
-                        B, L, _ = h_state.shape
-                        h_state = h_state.view(B, L, H, -1).permute(0, 2, 1, 3)  # (B, H, L, HD)
+                try:
+                    with torch.inference_mode():
+                        out = model(**enc, **run_kwargs)
+                            # print(acts)
+                    all_logits.append(out.logits[:, -1, :].cpu())
+                    all_masks.append(enc.attention_mask.cpu())
 
-                        token_counts = enc.attention_mask.cpu().sum(dim=1).clamp(min=1)
-                        token_counts = token_counts.unsqueeze(1).unsqueeze(1)  # (B, 1, 1)
-                        h_states = h_state.sum(dim=2) / token_counts  # (B, H, HD)
-                        all_hidden_sum[layer].append(h_states)
+                    for layer, tensors in acts.items():
+                        h_state = tensors[0].cpu() * enc.attention_mask.unsqueeze(-1).cpu()   # (B, L, 1)
+                        # print(tensors[0].shape)
+                        if atten: 
+                            H = model.config.num_attention_heads
+                            B, L, _ = h_state.shape
+                            h_state = h_state.view(B, L, H, -1).permute(0, 2, 1, 3)  # (B, H, L, HD)
 
-                        h_states = h_state[:, :, -1, :]
-                        print(layer, h_state.shape)
-                        all_hidden[layer].append(h_states)
-                    else:
-                        token_counts = enc.attention_mask.cpu().sum(dim=1).clamp(min=1)  # (B, 1), to prevent divide-by-zero
-                        token_counts = token_counts.unsqueeze(1)
-                        h_states = h_state.sum(dim=1) / token_counts  # (B, HD)
-                        all_hidden_sum[layer].append(h_states)
+                            token_counts = enc.attention_mask.cpu().sum(dim=1).clamp(min=1)
+                            token_counts = token_counts.unsqueeze(1).unsqueeze(1)  # (B, 1, 1)
+                            h_states = h_state.sum(dim=2) / token_counts  # (B, H, HD)
+                            all_hidden_sum[layer].append(h_states)
+
+                            h_states = h_state[:, :, -1, :]
+                            print(layer, h_state.shape)
+                            all_hidden[layer].append(h_states)
+                        else:
+                            token_counts = enc.attention_mask.cpu().sum(dim=1).clamp(min=1)  # (B, 1), to prevent divide-by-zero
+                            token_counts = token_counts.unsqueeze(1)
+                            h_states = h_state.sum(dim=1) / token_counts  # (B, HD)
+                            all_hidden_sum[layer].append(h_states)
 
 
-                        h_states = h_state[:, -1, :]   # (B, HD)
-                        all_hidden[layer].append(h_states)
+                            h_states = h_state[:, -1, :]   # (B, HD)
+                            all_hidden[layer].append(h_states)
 
-                    # token_counts = mask.sum(dim=1, keepdim=True).clamp(min=1)    # (B, 1)
-                    # print(h_state.shape)
-                    # seq_avg = (tensors[0].cpu() * mask.cpu()).sum(dim=1) / token_counts.cpu()
-                    # all_hidden[layer].append(h_state)
+                        # token_counts = mask.sum(dim=1, keepdim=True).clamp(min=1)    # (B, 1)
+                        # print(h_state.shape)
+                        # seq_avg = (tensors[0].cpu() * mask.cpu()).sum(dim=1) / token_counts.cpu()
+                        # all_hidden[layer].append(h_state)
 
-                    del tensors[:], h_state, h_states #, token_counts
+                        del tensors[:], h_state, h_states #, token_counts
+                        gc.collect()
+                        torch.cuda.empty_cache()
+
+                finally:
+                    # Hard cleanup so bs retries / next batches don't see stale captures
+                    for lst in acts.values():
+                        if lst:
+                            del lst[:]
                     gc.collect()
-                    torch.cuda.empty_cache()
-
-                id_ += 1
-                all_logits.append(out.logits[:, -1, :].cpu())
-                all_masks.append(enc.attention_mask.cpu())
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()  
 
                 print(f"Generated {len(chunk)} responses.")
 
