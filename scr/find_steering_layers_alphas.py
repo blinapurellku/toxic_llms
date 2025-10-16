@@ -102,7 +102,7 @@ def one_model(args, model):
 
     summary_path = os.path.join(d, args.summary_filename)
     with open(summary_path, "w") as f: json.dump(out, f, indent=2)
-    print(f"[summary] {model} -> {summary_path}")
+    # print(f"[summary] {model} -> {summary_path}")
     print(out)
 
 def parse_args():
@@ -115,18 +115,18 @@ def parse_args():
     p.add_argument("--output_dir", default="/data/erblina/Master_thesis")
     p.add_argument("--side", choices=["toxic","nontoxic"], default="toxic")
     p.add_argument("--labels_filename", default="labels.npy")
-    p.add_argument("--alpha_min", type=float, default=-2.0)
-    p.add_argument("--alpha_max", type=float, default=2.0)
+    p.add_argument("--alpha_min", type=float, default=-2.5)
+    p.add_argument("--alpha_max", type=float, default=2.5)
     p.add_argument("--summary_filename", default="diff_extrema_summary.json")
     return p.parse_args()
 
 if __name__ == "__main__":
     args = parse_args()
-    for m in [ "Qwen/Qwen2.5-3B", "Qwen/Qwen2.5-3B-Instruct"
+    for i, model in enumerate(["Qwen/Qwen2.5-3B", "Qwen/Qwen2.5-3B-Instruct", "allenai/OLMo-2-0425-1B-Instruct", "allenai/OLMo-2-0425-1B", "google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct", "google/gemma-2-2b", "meta-llama/Llama-3.2-3B"]): #"google/gemma-2-2b-it",
 
         #  "google/gemma-2-2b-it","meta-llama/Llama-3.2-3B-Instruct",
         # "google/gemma-2-2b","meta-llama/Llama-3.2-3B",
         # "allenai/OLMo-2-0425-1B-SFT","allenai/OLMo-2-0425-1B-DPO","allenai/OLMo-2-0425-1B-Instruct",
         # "allenai/OLMo-2-0425-1B"
-    ]: 
-        one_model(args, m)
+        args.model = model
+        one_model(args, model)

@@ -92,6 +92,7 @@ def parse_args():
     p.add_argument("--system_message", type=str, default=None,
                    help="System message for the chat template, if applicable")
     p.add_argument('--fil', type=str, default='cosine', help="choose attention heads to ablate based on: cosine, cosine_mean, pca and other methods")
+    p.add_argument('--top_n', type=int, default=8, help="number of top heads to ablate")
     return p.parse_args()
 
 
@@ -124,8 +125,9 @@ def main(args):
     prompts = load_dataset(args.dataset)  # 
 
     fil= args.fil #'pca'
-    top_n = 8
+    top_n = args.top_n #8
     all_heads, amplify_tox, mitigate_tox, _ = get_ablation_heads(safe_model_name, args.output_dir, tox_dir=fil, n=top_n)
+   
 
     name2mod = {n: m for n, m in model.named_modules()}
     ablate=True
@@ -344,7 +346,9 @@ if __name__ == "__main__":
     
     # for _, model in enumerate(["google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct"]): #"google/gemma-2-2b-it",
     args = parse_args()
-    model = "Qwen/Qwen2.5-3B" # "Qwen/Qwen2.5-3B-Instruct" #"google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct"
+    args.top_n = 1
+    model = "google/gemma-2-2b-it"# "Qwen/Qwen2.5-3B-Instruct" #"google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct"
     args.dataset = "walledai/HarmBench" #"truthfulqa/truthful_qa"     ["walledai/AdvBench", "walledai/DTStereotype", "walledai/CatHarmfulQA","walledai/DTToxicity","truthfulqa/truthful_qa"]
+    args.model = model
     main(args)
    
