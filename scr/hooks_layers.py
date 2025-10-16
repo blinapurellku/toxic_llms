@@ -65,7 +65,7 @@ def parse_args():
     )
     p.add_argument("--bnb_config", type=str, default=None)
     p.add_argument("--num_prompts", type=int, default=300)
-    p.add_argument("--output_dir", type=str, default="/data/erblina/Master_thesis")
+    p.add_argument("--output_dir", type=str, default="/mnt")
     p.add_argument("--max_new_tokens", type=int, default=256)
     p.add_argument("--temperature", type=float, default=0.7)
     p.add_argument("--top_p", type=float, default=0.9)

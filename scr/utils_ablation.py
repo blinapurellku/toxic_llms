@@ -103,6 +103,11 @@ def get_ablation_heads(safe_model_name, output_dir, tox_dir='pca', n=20):
             sign = torch.sign(sign)
             signed_scores = 1 - F.cosine_similarity(toxic_behaviour, non_toxic_behaviour, dim=-1) #[num_heads]
             signed_scores = signed_scores * sign
+        elif tox_dir == 'cosine_mean':
+            sign = toxic_behaviour.mean(dim=-1) - non_toxic_behaviour.mean(dim=-1)
+            sign = torch.sign(sign)
+            signed_scores = 1 - F.cosine_similarity(toxic_behaviour, overall_mean, dim=-1) #[num_heads]
+            signed_scores = signed_scores * sign
             
         elif tox_dir == "diff":
             signed_scores = toxic_behaviour.norm(dim=-1) - non_toxic_behaviour.norm(dim=-1)

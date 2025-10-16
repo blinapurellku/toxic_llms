@@ -34,6 +34,7 @@ from utils_evaluating_toxicity import classify_generation
 from utils_load_dataset_and_models import load_model_and_tokenizer, load_classifier, load_dataset, classify_models_dict
 from generate_responses import generate_responses
 from utils_hooks import steering_vector_hook, ablation_hook
+from utils_ablation import get_ablation_heads
 
 # Optional: avoid error spam from Torch Dynamo
 torch._dynamo.config.suppress_errors = False
@@ -49,100 +50,6 @@ if torch.cuda.is_available():
 # torch.use_deterministic_algorithms(True)
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
-def get_ablation_head(safe_model_name, output_dir, tox_dir='pca', n=20):
-    save_path = os.path.join(output_dir, safe_model_name)
-    atten_tensors = load_safetensors(
-            os.path.join(save_path, f"attention_states_pure.safetensors")
-        )
-    
-    labels_before = np.load(f"{args.output_dir}/{safe_model_name}/labels.npy")
-    layer_heads = {}
-    all_head_data = []
-    for layer_name in list(atten_tensors.keys()):
-        if layer_name not in layer_heads:
-            layer_heads[layer_name] = {}
-        
-        toxic_behaviour = atten_tensors[layer_name][labels_before==1].float().mean(dim=0)  # (num_heads, head_dim)
-        non_toxic_behaviour = atten_tensors[layer_name][labels_before==0].float().mean(dim=0)  # (num_heads, head_dim)
-        head_diff = toxic_behaviour - non_toxic_behaviour  # (num_heads, head_dim)
-        if tox_dir == "pca":
-            # First principal direction of head_diff (no centering to preserve sign convention)
-            _, _, V = torch.pca_lowrank(head_diff, q=1, center=False)
-            # _,_, V = torch.pca_lowrank(toxic_behaviour, q=1, center=False)
-            tox_axis = V[:, 0]     
-        else: 
-            tox_axis = head_diff.mean(dim=0)  # (head_dim,)
-        
-        tox_axis = F.normalize(tox_axis, dim=0)          # unit vector
-        # head_diff = F.normalize(head_diff, dim=-1)  # unit vectors
-        signed_scores = head_diff @ tox_axis  # cosine similarity with tox_axis
-        
-        amp_idx = torch.nonzero(signed_scores > 0, as_tuple=False).squeeze(1)
-        mit_idx = torch.nonzero(signed_scores < 0, as_tuple=False).squeeze(1)
-
-        amplify = amp_idx[torch.argsort(signed_scores[amp_idx], descending=True)[:5]].tolist()
-        mitigate = mit_idx[torch.argsort(signed_scores[mit_idx])[:5]].tolist()  # most negative first
-
-        layer_heads[layer_name]['amplify'] = amplify
-        layer_heads[layer_name]['mitigate'] = mitigate
-        layer_heads[layer_name]['tox_axis'] = toxic_behaviour
-        layer_heads[layer_name]['nontox_axis'] = non_toxic_behaviour
-        layer_heads[layer_name]['overall'] = atten_tensors[layer_name].float().mean(dim=0)
-        layer_heads[layer_name]['scores'] = signed_scores
-        
-        head_diff_norms = torch.linalg.norm(head_diff, dim=-1) # (num_heads,)
-
-        for head_id, score in enumerate(signed_scores):
-            all_head_data.append({
-                'layer': layer_name,
-                'head_id': head_id,
-                'score': score.item(),
-                'diff': head_diff_norms.max().item(),
-                })
-
-    all_scores = torch.tensor([d['score'] for d in all_head_data])
-    all_layers = [d['layer'] for d in all_head_data]
-    all_head_ids = [d['head_id'] for d in all_head_data]
-
-    all_diffs = torch.tensor([d['diff'] for d in all_head_data])
-
-    all_diff_s = torch.sort(all_diffs, descending=True)
-
-    top_k_amp_values, top_k_amp_indices = torch.topk(all_scores, k=min(n, len(all_scores)), largest=True)
-
-    top_k_mit_values, top_k_mit_indices = torch.topk(all_scores, k=min(n, len(all_scores)), largest=False)
-
-    
-    amplify_heads = {}
-    mitigate_heads = {}
-    all_heads = {}
-    # Process Amplify Heads
-    for idx in top_k_amp_indices.tolist():
-        layer_name = all_layers[idx]
-        head_id = all_head_ids[idx]
-        if layer_name not in amplify_heads:
-            amplify_heads[layer_name] = []
-        if layer_name not in all_heads:
-            all_heads[layer_name] = []
-        all_heads[layer_name].append(head_id)
-        amplify_heads[layer_name].append(head_id)
-
-    # Process Mitigate Heads
-    for idx in top_k_mit_indices.tolist():
-        layer_name = all_layers[idx]
-        head_id = all_head_ids[idx]
-        if layer_name not in mitigate_heads:
-            mitigate_heads[layer_name] = []
-        if layer_name not in all_heads:
-            all_heads[layer_name] = []
-        all_heads[layer_name].append(head_id)
-        mitigate_heads[layer_name].append(head_id)
-
-    print("Top amplify heads:", amplify_heads)
-    print("Top mitigate heads:", mitigate_heads)
-
-    return all_heads, amplify_heads, mitigate_heads, layer_heads
 
 
 
@@ -188,6 +95,7 @@ def parse_args():
     )
     p.add_argument("--system_message", type=str, default=None,
                    help="System message for the chat template, if applicable")
+    p.add_argument("--fil", type=str, default="cosine", help="Direction to use for toxicity (cosine_mean or cosine)")
     return p.parse_args()
 
 
@@ -217,14 +125,19 @@ def main(args):
         print("Using template", template["description"])
 
     print('Loading dataset ', safe_dataset)
-    prompts = load_dataset(args.dataset)  # 
+    prompts = load_dataset(args.dataset)  #
+    fil = args.fil
 
-    all_heads, amplify_tox, mitigate_tox, _ = get_ablation_head(safe_model_name, args.output_dir, tox_dir='pca', n=20)
+    num_layers = model.config.num_hidden_layers
+    top_n = int((num_heads * num_layers) * 0.1)
+    print(f"Model has {num_layers} layers and {num_heads} heads per layer. 10% of heads: {top_n}")
+
+
+    all_heads, amplify_tox, mitigate_tox, _ = get_ablation_heads(safe_model_name, args.output_dir, tox_dir=fil, n=top_n)
 
     name2mod = {n: m for n, m in model.named_modules()}
     ablate=True
     
-    side = 'toxic' # or 'nontoxic' 'toxic'
 
     labels_before = np.load(f"{args.output_dir}/{safe_model_name}/labels.npy")
     valid_lab = [r for r in labels_before if r != -1]
@@ -236,7 +149,6 @@ def main(args):
     # layer_names = [n for n in layer_names if n in name2mod]
 
     # layer_names = [args.steer_layer] #list(steering_vector.keys())
-    alpha = args.alpha if hasattr(args, 'alpha') else 1.0
     
     if args.dataset == "walledai/HarmBench":
         layer_names = list(all_heads.keys())
@@ -247,6 +159,8 @@ def main(args):
 
     # print(len(layer_names_mitigate), "layers to steer (mitigate)")
     # print(len(layer_names_amplify), "layers to steer (amplify)")
+    output_dir1 = f"{args.output_dir}/ablation"
+    # os.makedirs(output_dir1, exist_ok=True)
 
     for layer_name in layer_names: 
         
@@ -263,24 +177,45 @@ def main(args):
         print(f"Ablate in layer {layer_name} heads {all_heads[layer_name]} on toxic and nontoxic side")
         for head_id in all_heads[layer_name]:
             print(f"Ablating head {head_id} in layer {layer_name}")
+            if ablate:
+                if layer_name in mitigate_tox and head_id in mitigate_tox[layer_name]:
+                    print(f"Amplify toxicity with ablating mitigation for head {head_id} in layer {layer_name}")
+                    output_dir = f"{output_dir1}/amplify"
+                    # os.makedirs(output_dir, exist_ok=True)
+                elif layer_name in amplify_tox and head_id in amplify_tox[layer_name]:
+                    print(f"Mitigate toxicity with ablating amplification for head {head_id} in layer {layer_name}")
+                    output_dir = f"{output_dir1}/mitigate"
+                    # os.makedirs(output_dir, exist_ok=True)
+            else:
+                if layer_name in mitigate_tox and head_id in mitigate_tox[layer_name]:
+                    print(f"Mitigate toxicity filling mitigation for head {head_id} in layer {layer_name}")
+                    output_dir = f"{output_dir1}/mitigate"
+                    # os.makedirs(output_dir, exist_ok=True)
 
+                elif layer_name in amplify_tox and head_id in amplify_tox[layer_name]:
+                    print(f"Amplify toxicity by filling amplification for head {head_id} in layer {layer_name}")
+                    output_dir = f"{output_dir1}/amplify"
+                    # os.makedirs(output_dir, exist_ok=True)
+
+            os.makedirs(output_dir, exist_ok=True)
+            head = f"{head_id}_{fil}"
             if args.dataset == "walledai/HarmBench":
                 if ablate:
-                    saved_path = f"{args.output_dir}/{safe_model_name}/{layer_name}__head_{head_id}_ablate.json.zst" 
+                    saved_path = f"{output_dir}/{safe_model_name}/{layer_name}__head_{head}_ablate.json.zst" 
                 else:
-                    saved_path = f"{args.output_dir}/{safe_model_name}/{layer_name}__head_{head_id}_mean.json.zst"
+                    saved_path = f"{output_dir}/{safe_model_name}/{layer_name}__head_{head}_mean.json.zst"
                 data = None
 
             else:
                 if ablate:
-                    saved_path = f"{args.output_dir}/{safe_model_name}/{safe_dataset}__{layer_name}__head_{head_id}_ablate.json.zst"
+                    saved_path = f"{output_dir}/{safe_model_name}/{safe_dataset}__{layer_name}__head_{head}_ablate.json.zst"
                 else:
-                    saved_path = f"{args.output_dir}/{safe_model_name}/{safe_dataset}__{layer_name}__head_{head_id}_mean.json.zst"
+                    saved_path = f"{output_dir}/{safe_model_name}/{safe_dataset}__{layer_name}__head_{head}_mean.json.zst"
                 data = safe_dataset
             
 
             if os.path.exists(saved_path):
-                filtered_prompts, filtered_responses = load_prompts_responses_head(args.output_dir, args.model, data, layer_name, head_id, ablation=ablate)
+                filtered_prompts, filtered_responses = load_prompts_responses_head(output_dir, args.model, data, layer_name, head, ablation=ablate)
                 print(f"Generated {len(filtered_prompts)} valid responses out of {len(filtered_prompts)} prompts.")
                 print(f"Generated {len(filtered_responses)} valid responses out of {len(filtered_responses)} total responses.")
                 responses_after[layer_name][head_id] = filtered_responses
@@ -319,7 +254,7 @@ def main(args):
                     prompts_after[layer_name][head_id] = filtered_prompts
 
                     # Save the prompts and responses
-                    save_prompts_responses_head(args.output_dir, args.model, data, layer_name, head_id, filtered_prompts, filtered_responses, ablation=ablate)
+                    save_prompts_responses_head(output_dir, args.model, data, layer_name, head, filtered_prompts, filtered_responses, ablation=ablate)
 
                 finally:
                     # for h in hooks:
@@ -366,16 +301,40 @@ def main(args):
     for layer_name in list(responses_after.keys()):
         for head_id, responses in responses_after[layer_name].items():   
 
+            if ablate:
+                if layer_name in mitigate_tox and head_id in mitigate_tox[layer_name]:
+                    print(f"Amplify toxicity with ablating mitigation for head {head_id} in layer {layer_name}")
+                    output_dir = f"{output_dir1}/amplify"
+                    # os.makedirs(output_dir, exist_ok=True)
+                elif layer_name in amplify_tox and head_id in amplify_tox[layer_name]:
+                    print(f"Mitigate toxicity with ablating amplification for head {head_id} in layer {layer_name}")
+                    output_dir = f"{output_dir1}/mitigate"
+                    # os.makedirs(output_dir, exist_ok=True)
+            else:
+                if layer_name in mitigate_tox and head_id in mitigate_tox[layer_name]:
+                    print(f"Mitigate toxicity filling mitigation for head {head_id} in layer {layer_name}")
+                    output_dir = f"{output_dir1}/mitigate"
+                    # os.makedirs(output_dir, exist_ok=True)
+
+                elif layer_name in amplify_tox and head_id in amplify_tox[layer_name]:
+                    print(f"Amplify toxicity by filling amplification for head {head_id} in layer {layer_name}")
+                    output_dir = f"{output_dir1}/amplify"
+                    # os.makedirs(output_dir, exist_ok=True)
+
+            os.makedirs(output_dir, exist_ok=True)
+
+            head = f"{head_id}_{fil}"
+
             if args.dataset in "walledai/HarmBench":
                 if ablate:
-                    save_np = f"{args.output_dir}/{safe_model_name}/{layer_name}_ablation_head_{head_id}_ablate.npy"
+                    save_np = f"{output_dir}/{safe_model_name}/{layer_name}_ablation_head_{head}_ablate.npy"
                 else:
-                    save_np = f"{args.output_dir}/{safe_model_name}/{layer_name}_ablation_head_{head_id}_mean.npy"
+                    save_np = f"{output_dir}/{safe_model_name}/{layer_name}_ablation_head_{head}_mean.npy"
             else:
                 if ablate:
-                    save_np = f"{args.output_dir}/{safe_model_name}/{layer_name}_ablation_head_{head_id}_{safe_dataset}_ablate.npy"
+                    save_np = f"{output_dir}/{safe_model_name}/{layer_name}_ablation_head_{head}_{safe_dataset}_ablate.npy"
                 else:
-                    save_np = f"{args.output_dir}/{safe_model_name}/{layer_name}_ablation_head_{head_id}_{safe_dataset}_mean.npy"
+                    save_np = f"{output_dir}/{safe_model_name}/{layer_name}_ablation_head_{head}_{safe_dataset}_mean.npy"
 
    
             # if os.path.exists(save_np):
