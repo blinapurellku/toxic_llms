@@ -56,6 +56,8 @@ def parse_args():
     p = argparse.ArgumentParser("Evaluate LLM for harmful behavior on HarmBench.")
     p.add_argument("--model", default="google/gemma-2-2b") # meta-llama/Llama-3.1-8B, google/gemma-2-2b-it, meta-llama/Llama-3.2-3B-Instruct, meta-llama/Llama-3.2-3B, google/gemma-7b
     p.add_argument("--cls_model", default="cais/HarmBench-Mistral-7b-val-cls") #cais/HarmBench-Llama-2-13b-cls, cais/HarmBench-Mistral-7b-val-cls
+    p.add_argument("--dataset", default="walledai/HarmBench") # "truthfulqa/truthful_qa"  ["walledai/AdvBench", "walledai/DTStereotype", "walledai/CatHarmfulQA","walledai/DTToxicity","truthfulqa/truthful_qa"]
+
     p.add_argument(
         "--steer_layer",
         type=str,
@@ -89,6 +91,7 @@ def parse_args():
     )
     p.add_argument("--system_message", type=str, default=None,
                    help="System message for the chat template, if applicable")
+    p.add_argument('--fil', type=str, default='cosine', help="choose attention heads to ablate based on: cosine, cosine_mean, pca and other methods")
     return p.parse_args()
 
 
@@ -120,7 +123,7 @@ def main(args):
     print('Loading dataset ', safe_dataset)
     prompts = load_dataset(args.dataset)  # 
 
-    fil= 'mean' #'pca'
+    fil= args.fil #'pca'
     top_n = 8
     all_heads, amplify_tox, mitigate_tox, _ = get_ablation_heads(safe_model_name, args.output_dir, tox_dir=fil, n=top_n)
 

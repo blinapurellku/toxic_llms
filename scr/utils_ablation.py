@@ -103,10 +103,28 @@ def get_ablation_heads(safe_model_name, output_dir, tox_dir='pca', n=20):
             sign = torch.sign(sign)
             signed_scores = 1 - F.cosine_similarity(toxic_behaviour, non_toxic_behaviour, dim=-1) #[num_heads]
             signed_scores = signed_scores * sign
+
+        elif tox_dir == 'cosine_mean':
+            sign = toxic_behaviour.mean(dim=-1) - non_toxic_behaviour.mean(dim=-1)
+            sign = torch.sign(sign)
+            signed_scores = 1 - F.cosine_similarity(toxic_behaviour, overall_mean, dim=-1) #[num_heads]
+            signed_scores = signed_scores * sign
             
         elif tox_dir == "diff":
             signed_scores = toxic_behaviour.norm(dim=-1) - non_toxic_behaviour.norm(dim=-1)
-        
+
+        elif tox_dir == "dis_mean" :
+            cos_dist = F.cosine_similarity(toxic_behaviour, non_toxic_behaviour, dim=-1)
+
+            sgn1 = torch.sign(head_diff.mean(dim=-1))
+            sgn2 = torch.sign(cos_dist)  # still use cos_sim's sign
+
+            pos_mask = (sgn1 > 0) & (sgn2 > 0)
+            neg_mask = (sgn1 < 0) & (sgn2 < 0)
+            signed_scores = torch.full_like(cos_dist, 0.0)
+            signed_scores[pos_mask] =  torch.abs(cos_dist[pos_mask])   # + only if both signs are +
+            signed_scores[neg_mask] = -torch.abs(cos_dist[neg_mask]) 
+            
         else: # this is with mean head
             signed_scores = head_diff.mean(dim=-1)
 
