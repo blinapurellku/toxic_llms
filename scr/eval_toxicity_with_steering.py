@@ -354,28 +354,46 @@ model_steering_2 = {
     }
 
 
+model_steering_3 = {
+    'Qwen/Qwen2.5-3B': {'layers': ['model.layers.19', 'model.layers.19', 'model.layers.19', 'model.layers.21', 'model.layers.20'], 'alphas_up': [1.6, 1.6, 1.6, 2.0, 1.6], 'alphas_down': [-2.4, -2.4, -2.4, -2.2, -2.2], 'max_avg_tox': [0.87, 0.87, 0.87, 0.79, 0.795], 'min_avg_tox': [0.145, 0.145, 0.145, 0.155, 0.175]},
+    
+    'Qwen/Qwen2.5-3B-Instruct': {'layers': ['model.layers.21', 'model.layers.18', 'model.layers.21', 'model.layers.20', 'model.layers.22'], 'alphas_up': [2.2, 2.4, 2.2, 2.0, 2.0], 'alphas_down': [-0.6, -1.5, -0.6, -0.6, -0.6], 'max_avg_tox': [0.805, 0.445, 0.805, 0.785, 0.78], 'min_avg_tox': [0.0, 0.0, 0.0, 0.0, 0.0]},
+    
+    'allenai/OLMo-2-0425-1B-Instruct': {'layers': ['model.layers.9', 'model.layers.5', 'model.layers.9', 'model.layers.7', 'model.layers.8'], 'alphas_up': [2.0, 2.4, 2.0, 1.8, 1.6], 'alphas_down': [-0.8, -2.0, -0.8, -1.0, -0.8], 'max_avg_tox': [0.75, 0.325, 0.75, 0.735, 0.715], 'min_avg_tox': [0.0, 0.0, 0.0, 0.0, 0.0]},
+    
+    'allenai/OLMo-2-0425-1B': {'layers': ['model.layers.13', 'model.layers.0', 'model.layers.0', 'model.layers.7', 'model.layers.4'], 'alphas_up': [-0.2, 0.09, 0.09, -0.07, 0.05], 'alphas_down': [-0.7, -2.4, -2.4, 2.4, -2.4], 'max_avg_tox': [0.41, 0.405, 0.405, 0.39, 0.39], 'min_avg_tox': [0.25, 0.055, 0.055, 0.065, 0.07]},
+    
+    'google/gemma-2-2b-it': {'layers': ['model.layers.10', 'model.layers.7', 'model.layers.10', 'model.layers.11', 'model.layers.12'], 'alphas_up': [1.5, 2.4, 1.5, 1.1, 1.0], 'alphas_down': [-0.3, -1.0, -0.3, -0.25, -0.2], 'max_avg_tox': [0.63, 0.255, 0.63, 0.615, 0.595], 'min_avg_tox': [0.0, 0.0, 0.0, 0.0, 0.0]},
+    
+    'meta-llama/Llama-3.2-3B-Instruct': {'layers': ['model.layers.12', 'model.layers.9', 'model.layers.12', 'model.layers.13', 'model.layers.14'], 'alphas_up': [2.4, 2.4, 2.4, 2.4, 2.0], 'alphas_down': [-0.8, -2.0, -0.8, -0.5, -0.5], 'max_avg_tox': [0.855, 0.425, 0.855, 0.825, 0.79], 'min_avg_tox': [0.0, 0.0, 0.0, 0.0, 0.0]},
+    
+    'google/gemma-2-2b': {'layers': ['model.layers.2', 'model.layers.6', 'model.layers.6', 'model.layers.13', 'model.layers.7'], 'alphas_up': [1.8, 1.2, 1.2, 1.4, 1.3], 'alphas_down': [-0.2, 2.4, 2.4, -2.2, -1.8], 'max_avg_tox': [0.36, 0.36, 0.36, 0.36, 0.35], 'min_avg_tox': [0.135, 0.01, 0.01, 0.045, 0.035]},
+    
+    'meta-llama/Llama-3.2-3B': {'layers': ['model.layers.3', 'model.layers.13', 'model.layers.11', 'model.layers.13', 'model.layers.12'], 'alphas_up': [1.0, 0.9, 1.0, 0.9, 2.2], 'alphas_down': [-2.4, -2.4, -2.4, -2.4, -2.2], 'max_avg_tox': [0.605, 0.56, 0.6, 0.56, 0.58], 'min_avg_tox': [0.365, 0.26, 0.29, 0.26, 0.29]}
+    }
+
+
 if __name__ == "__main__":
     
-    # for _, model in enumerate(["google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct"]): #"google/gemma-2-2b-it",
     args = parse_args()
     main(args)
     # model = "Qwen/Qwen2.5-3B" # "Qwen/Qwen2.5-3B-Instruct" #"google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct"
-    # # args.dataset = "walledai/AdvBench" #"truthfulqa/truthful_qa"     ["walledai/AdvBench", "walledai/DTStereotype", "walledai/CatHarmfulQA","walledai/DTToxicity","truthfulqa/truthful_qa"]
+    # args.dataset = "walledai/AdvBench" #"truthfulqa/truthful_qa"     ["walledai/AdvBench", "walledai/DTStereotype", "walledai/CatHarmfulQA","walledai/DTToxicity","truthfulqa/truthful_qa"]
 
-    # # args.cls_model = "allenai/truthfulqa-truth-judge-llama2-7B"
-    # info = model_steering_2[args.model]
-    # layers = info['layers']
-    # alpha_pos = info['alphas_up']
-    # alpha_neg = info['alphas_down']
-    # # args.model = model
-    # for i in range(len(layers)):
-    #     args.steer_layer = layers[i]
-    # #, "HateXplain", "ToxiGen", "RealToxicityPrompts"]
-    #     for j in range(2): # 0 - positive, 1 - negative
-    #         if j == 0:
-    #             args.alpha = alpha_pos[i]
-    #         else:
-    #             args.alpha = alpha_neg[i]
-    #         print(f"Running evaluation for model: {args.model} with alpha: {args.alpha} on layer: {args.steer_layer}")
-    #         main(args)
+    # args.cls_model = "allenai/truthfulqa-truth-judge-llama2-7B"
+    info = model_steering_3[args.model]
+    layers = info['layers']
+    alpha_pos = info['alphas_up']
+    alpha_neg = info['alphas_down']
+    # args.model = model
+    for i in range(len(layers)):
+        args.steer_layer = layers[i]
+    #, "HateXplain", "ToxiGen", "RealToxicityPrompts"]
+        for j in range(2): # 0 - positive, 1 - negative
+            if j == 0:
+                args.alpha = alpha_pos[i]
+            else:
+                args.alpha = alpha_neg[i]
+            print(f"Running evaluation for model: {args.model} with alpha: {args.alpha} on layer: {args.steer_layer}")
+            main(args)
         
