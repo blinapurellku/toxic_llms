@@ -121,7 +121,7 @@ def register_head_ablation(
     spec: Dict[str, Iterable[int]],
     *,
     ablate: bool=True, #str = "zero",                   # "zero" or "fill"
-    fill: Optional[torch.Tensor] = None,  # (head_dim,) or (num_heads_to_fill, head_dim)
+    fill_layer: Optional[Dict[str, torch.Tensor]] = None,  # layers: (head_dim,) or layers: (num_heads, head_dim)
 ) -> List[torch.utils.hooks.RemovableHandle]:
     """
     Register forward pre-hooks on *named* o_proj modules to ablate specific heads.
@@ -139,7 +139,7 @@ def register_head_ablation(
 
     handles = []
 
-    def make_hook(num_heads: int, heads: Iterable[int], fill: Optional[torch.Tensor]):
+    def make_hook(num_heads: int, heads: Iterable[int], ablate: bool=True, fill: Optional[torch.Tensor]=None):
         heads = torch.tensor(sorted(set(heads)), dtype=torch.long)
 
         # if fill is not None:
@@ -153,7 +153,7 @@ def register_head_ablation(
         #         raise ValueError("fill_vec must be 1D or 2D.")
         # else:
         #     fill_local = None
-        fill = fill.detach() if isinstance(fill, torch.Tensor) else None
+        fill_norm = fill.detach() if isinstance(fill, torch.Tensor) else None
 
         def _hook(_m, inp):
             x = inp[0] if isinstance(inp, tuple) else inp  # (B, L, n_heads * head_dim)
@@ -166,10 +166,18 @@ def register_head_ablation(
             if ablate: #mode == "zero":
                 x.index_fill_(dim=2, index=heads.to(x.device), value=0.0)
             else:
-                fill = fill.to(dtype=x.dtype, device=x.device) # (H, head_dim)
+                nonlocal fill_norm
+                if fill_norm is None:
+                
+                    fill_norm = fill.contiguous()
+                else:
+                    raise ValueError("fill must be 1D or 2D tensor.")
+                
+                fill_t = fill.to(dtype=x.dtype, device=x.device) # (H, head_dim)
+
                 for idx, h in enumerate(heads.tolist()):
                     # fill_local = fill[h].view(1,1,-1).expand(x.size(0), x.size(1), -1) # (B, L, head_dim)
-                    x[:, :, h, :] = fill[h].view(1,1,-1).expand(x.size(0), x.size(1), -1) # (B, L, head_dim) fill_local
+                    x[:, :, h, :] = fill_t[h].view(1,1,-1).expand(x.size(0), x.size(1), -1) # (B, L, head_dim) fill_local
             # else:
             #     raise ValueError("mode must be 'zero' or 'fill'.")
 
@@ -189,7 +197,9 @@ def register_head_ablation(
         parent = dict(model.named_modules()).get(parent_name)
         num_heads = model.config.num_attention_heads #getattr(parent, "num_heads")
 
-        hook = make_hook(num_heads, heads, fill)
+        fill = fill_layer.get(name) if fill_layer is not None else None
+        
+        hook = make_hook(num_heads, heads, ablate, fill)
         handles.append(module.register_forward_pre_hook(hook))
         print(f"✅ Hook registered on {name} for heads {heads}")
 

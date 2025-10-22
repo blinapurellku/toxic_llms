@@ -49,7 +49,8 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 #         head_diff = toxic_behaviour - non_toxic_behaviour  # (num_heads, head_dim)
 #         sign_diff = toxic_behaviour.norm(dim=-1) - non_toxic_behaviour.norm(dim=-1)  # (num_heads,)
 
-
+def _fix_fill(fill):
+    pass
 def get_ablation_heads(safe_model_name, output_dir, tox_dir='pca', n=20):
     save_path = os.path.join(output_dir, safe_model_name)
     atten_tensors = load_safetensors(
@@ -72,13 +73,7 @@ def get_ablation_heads(safe_model_name, output_dir, tox_dir='pca', n=20):
         non_toxic_behaviour = atten_tensors[layer_name][labels_before==0].float().mean(dim=0)  # (num_heads, head_dim)
         head_diff = toxic_behaviour - non_toxic_behaviour  # (num_heads, head_dim)
         if tox_dir == "pca":
-            # First principal direction of head_diff (no centering to preserve sign convention)
-            _, _, V = torch.pca_lowrank(head_diff, q=1, center=True)
-            # _,_, V = torch.pca_lowrank(toxic_behaviour, q=1, center=False)
-            tox_axis = V[:, 0]     
-            tox_axis = F.normalize(tox_axis, dim=0)          # unit vector
-            # head_diff = F.normalize(head_diff, dim=-1)  # unit vectors
-            signed_scores = head_diff @ tox_axis  # cosine similarity with tox_axis
+            pass
        
         elif tox_dir == "mean_head": 
             tox_axis = head_diff.mean(dim=0)  # (head_dim,)
@@ -93,24 +88,25 @@ def get_ablation_heads(safe_model_name, output_dir, tox_dir='pca', n=20):
             signed_scores = head_diff @ tox_axis  # cosine similarity with tox_axis
         
         elif tox_dir== 'cosine_tox':
-            signed_scores = F.cosine_similarity(toxic_behaviour, overall_mean, dim=-1) #[num_heads]
+            signed_scores = F.cosine_similarity(non_toxic_behaviour, overall_mean, dim=-1) #[num_heads]
         
         elif tox_dir== 'cosine_diff':
-            signed_scores = F.cosine_similarity(head_diff, overall_mean, dim=-1) #[num_heads]
+            signed_scores = F.cosine_similarity(- head_diff, overall_mean, dim=-1) #[num_heads]
         
         elif tox_dir == 'cosine':
             sign = toxic_behaviour.norm(dim=-1) - non_toxic_behaviour.norm(dim=-1)
             sign = torch.sign(sign)
-            signed_scores = 1 - F.cosine_similarity(toxic_behaviour, non_toxic_behaviour, dim=-1) #[num_heads]
+            signed_scores = 1 - F.cosine_similarity(toxic_behaviour, overall_mean, dim=-1) #non_toxic_behaviour, dim=-1) #[num_heads]
             signed_scores = signed_scores * sign
+
         elif tox_dir == 'cosine_mean':
-            sign = toxic_behaviour.mean(dim=-1) - non_toxic_behaviour.mean(dim=-1)
+            sign = - toxic_behaviour.mean(dim=-1) + non_toxic_behaviour.mean(dim=-1)
             sign = torch.sign(sign)
-            signed_scores = 1 - F.cosine_similarity(toxic_behaviour, overall_mean, dim=-1) #[num_heads]
+            signed_scores = 1 - F.cosine_similarity(non_toxic_behaviour, overall_mean, dim=-1) #[num_heads]
             signed_scores = signed_scores * sign
             
         elif tox_dir == "diff":
-            signed_scores = toxic_behaviour.norm(dim=-1) - non_toxic_behaviour.norm(dim=-1)
+            signed_scores = - toxic_behaviour.norm(dim=-1) + non_toxic_behaviour.norm(dim=-1)
 
         elif tox_dir == "dis_mean" :
             cos_dist = F.cosine_similarity(toxic_behaviour, non_toxic_behaviour, dim=-1)
@@ -127,7 +123,7 @@ def get_ablation_heads(safe_model_name, output_dir, tox_dir='pca', n=20):
 
         
         else: # this is with mean head
-            signed_scores = head_diff.mean(dim=-1)
+            signed_scores = - head_diff.mean(dim=-1)
 
         amp_idx = torch.nonzero(signed_scores > 0, as_tuple=False).squeeze(1)
         mit_idx = torch.nonzero(signed_scores < 0, as_tuple=False).squeeze(1)

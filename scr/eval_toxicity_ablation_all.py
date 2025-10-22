@@ -92,12 +92,15 @@ def parse_args():
     p.add_argument("--system_message", type=str, default=None,
                    help="System message for the chat template, if applicable")
     p.add_argument("--fil", type=str, default="cosine", help="fil for ablation: cosine, cosine_mean, cosine_tox, ")
+    # p.add_argument("--ablate", type=bool, default=False, help="Ablate heads instead of filling them")
+    p.add_argument("--ablate", action="store_true", help="Ablate heads instead of filling them")
+
     return p.parse_args()
 
 
 def main(args):
     # args = parse_args()
-
+    print("Arguments:", args)
     if args.bnb_config:
         bnb_config_1 = BitsAndBytesConfig(load_in_8bit=True, bnb_8bit_compute_dtype=torch.bfloat16)
     else:
@@ -129,14 +132,20 @@ def main(args):
     all_heads, amplify_tox, mitigate_tox, _ = get_ablation_heads(safe_model_name, args.output_dir, tox_dir=fil, n=top_n)
 
     name2mod = {n: m for n, m in model.named_modules()}
-    ablate=True
+    ablate=True #args.ablate
     
     side = 'toxic' # or 'nontoxic' 'toxic'
 
+    atten_tensors = load_safetensors(
+            os.path.join(f"{args.output_dir}/{safe_model_name}", f"attention_states_pure.safetensors")
+        )
+    
     labels_before = np.load(f"{args.output_dir}/{safe_model_name}/labels.npy")
     valid_lab = [r for r in labels_before if r != -1]
     avg_label = sum(valid_lab) / len(labels_before)
     print(f"Mean toxicity label: {avg_label:.3f}, {sum(valid_lab)}/{len(labels_before)} , valid responses: {len(valid_lab)}")
+    fill_tox = {layer: atten[labels_before ==1].float().mean(dim=0) for layer, atten in atten_tensors.items()}
+    fill_nontox = {layer: atten[labels_before ==0].float().mean(dim=0) for layer, atten in atten_tensors.items()}
 
     responses_after = {}
     prompts_after = {}
@@ -152,9 +161,11 @@ def main(args):
         if ablate:
             print(f"Ablating heads to {mode} toxicity...")
             spec = amplify_tox if mode == 'mitigate' else mitigate_tox
+            fill_atten = None
         else:
             print(f"Filling heads to {mode} toxicity...")
-            spec = mitigate_tox if mode == 'mitigate' else amplify_tox
+            spec = amplify_tox if mode == 'mitigate' else mitigate_tox
+            fill_atten = fill_nontox if mode == 'mitigate' else fill_tox
             
 
         metadata = {
@@ -174,7 +185,7 @@ def main(args):
         prompts_after[mode] = {}
         responses_after[mode] = {}
 
-        head_id = f'{mode}_topk_{top_n}_{fil}'
+        head_id = f'{mode}_topk_{top_n}_{fil}_t'
         layer_name = 'all_layers'
 
         if args.dataset == "walledai/HarmBench":
@@ -194,6 +205,7 @@ def main(args):
                 
 
         if os.path.exists(saved_path):
+            # pass
             filtered_prompts, filtered_responses = load_prompts_responses_head(output_dir, args.model, data, layer_name, head_id, ablation=ablate)
             print(f"Generated {len(filtered_prompts)} valid responses out of {len(filtered_prompts)} prompts.")
             print(f"Generated {len(filtered_responses)} valid responses out of {len(filtered_responses)} total responses.")
@@ -202,7 +214,7 @@ def main(args):
 
         else:
 
-            handle = register_head_ablation(model, spec, ablate=ablate)
+            handle = register_head_ablation(model, spec, ablate=True)# , fill_layer=fill_atten)
             # hooks.append(handle)
 
             try:
@@ -282,10 +294,10 @@ def main(args):
         output_dir = f"{args.output_dir}/{mode}"
         os.makedirs(f"{output_dir}/{safe_model_name}", exist_ok=True)
 
-        head_id = f'{mode}_top_k_{top_n}_{fil}'
+        head_id = f'{mode}_top_k_{top_n}_{fil}_t'
         layer_name = 'all_layers'
 
-        if args.dataset in "walledai/HarmBench":
+        if args.dataset == "walledai/HarmBench":
             if ablate:
                 save_np = f"{output_dir}/{safe_model_name}/{layer_name}_ablation_head_{head_id}_ablate.npy"
             else:
