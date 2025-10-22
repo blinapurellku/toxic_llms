@@ -103,14 +103,25 @@ def main(args):
     # all_p = {}
     res['mitigate'] = []
     res['amplify'] = []
-    fil ='dis_mean' # 'pca' or 'mean_head' or 'diff', 'cosine_diff, cosine
-    for a in range(5, 15): 
+    
+    models_get ={
+    "allenai/OLMo-2-0425-1B-Instruct":25, "allenai/OLMo-2-0425-1B": 25,"Qwen/Qwen2.5-3B-Instruct":57,"Qwen/Qwen2.5-3B":57,
+            "google/gemma-2-2b-it":20,  "google/gemma-2-2b":20, "meta-llama/Llama-3.2-3B-Instruct":67 ,"meta-llama/Llama-3.2-3B":67
+
+    }
+    fil ='cosine' # 'pca' or 'mean_head' or 'diff', 'cosine_diff, cosine
+    for a in range(1, models_get[args.model]+1):  # range(0, num_heads+1, 2)  # Ablate from 0 to all heads
 
         layer_name = "all_layers"
-        head_id = f"mitigate_top_k_{a}"  #
+        # head_id = f"mitigate_top_k_{a}_non"  #
+        top_n = a
+        mode = 'mitigate'
+        head_id = f'{mode}_top_k_{top_n}_{fil}'#_non'
 
-        labels_after = np.load(f"{args.output_dir}/mitigate/{safe_model_name}/all_layers_ablation_head_mitigate_top_k_{a}_{fil}_ablate.npy", allow_pickle=True).item()['labels']
-        labels_after_amplify = np.load(f"{args.output_dir}/amplify/{safe_model_name}/all_layers_ablation_head_amplify_top_k_{a}_{fil}_ablate.npy", allow_pickle=True).item()['labels']
+        labels_after = np.load(f"{args.output_dir}/mitigate/{safe_model_name}/all_layers_ablation_head_{head_id}_ablate.npy", allow_pickle=True).item()['labels']
+        mode = 'amplify'
+        head_id = f'{mode}_top_k_{top_n}_{fil}_t'
+        labels_after_amplify = np.load(f"{args.output_dir}/amplify/{safe_model_name}/all_layers_ablation_head_{head_id}_ablate.npy", allow_pickle=True).item()['labels']
         valid_lab_mitigate = [r for r in labels_after if r != -1]
         avg_l = sum(valid_lab_mitigate) / len(labels_after)
         res['mitigate'].append({'top_n': a, 'avg_toxicity': avg_l})
@@ -124,10 +135,10 @@ def main(args):
 
 
 
-    
+    os.makedirs(f"/home/fe/purelku/Desktop/Master_thesis/results_ablation_plot/{safe_model_name}", exist_ok=True)
     
 
-    plt.figure(figsize=(10, 8))
+    plt.figure(figsize=(10, 4))
 
     plt.axhline(y=avg_label, linestyle="--", color="gray", linewidth=1.5,
             label=rf"ablated h=0")
@@ -143,12 +154,12 @@ def main(args):
 
     
     plt.xlabel("# Heads ablated")
-    plt.ylabel("Average Toxicity")
+    plt.ylabel("Average Toxicity1")
     plt.title(f"Ablation Results for {safe_model_name}")
-    plt.legend(title=r"ablated h (# heads)", bbox_to_anchor=(1.05, 1.05), ncol=2)
+    plt.legend(title=r"ablated h (# heads)", bbox_to_anchor=(1.05, 1.05), ncol=1)
     plt.xticks(ordered_l, rotation=45)
     plt.tight_layout()
-    plt.savefig(f"/home/fe/purelku/Desktop/Master_thesis/results_steering_plot/{safe_model_name}_ablation_results_{fil}.png", dpi=300, bbox_inches='tight')
+    plt.savefig(f"/home/fe/purelku/Desktop/Master_thesis/results_ablation_plot/{safe_model_name}/{safe_model_name}_ablation_results_{fil}.png", dpi=300, bbox_inches='tight')
     # plt.savefig(f"/home/fe/purelku/Desktop/Master_thesis/results_steering_plot/{safe_model_name}_steering_results.svg", format='svg')
     plt.close()
 
@@ -222,7 +233,6 @@ def main(args):
     
     
     
-
 
         
 

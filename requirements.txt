@@ -27,3 +27,4 @@ wandb
 bitsandbytes
 sentencepiece
 seaborn
+metric-learn

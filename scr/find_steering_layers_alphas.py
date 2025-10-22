@@ -14,11 +14,34 @@ def load_all_alphas(d, side="toxic"):
     return out
 
 def build_avg_by_layer(alpha2labels):
+    EXCLUDED_LAYERS_INDICES = {0, 1}
+
+    def is_layer_excluded(layer_name):
+        try:
+            # Assuming layer name is like 'block.0' or 'model.layers.4'. We extract the last number.
+            layer_idx = int(layer_name.split(".")[-1])
+            return layer_idx in EXCLUDED_LAYERS_INDICES
+        except ValueError:
+            return False # Keep layer if parsing fails
+        
     alphas = sorted(alpha2labels)
-    layers = sorted({k for d in alpha2labels.values() for k in d}, key=lambda x: int(x.split(".")[-1]))
+    # layers = sorted({k for d in alpha2labels.values() for k in d}, key=lambda x: int(x.split(".")[-1]))
+    all_layers = {k for d in alpha2labels.values() for k in d}
+
+    # Filter out excluded layers and sort
+    layers = sorted(
+        [L for L in all_layers if not is_layer_excluded(L)],
+        key=lambda x: int(x.split(".")[-1])
+    )
     def avg_valid(v):
-        v = [x for x in v if x != -1]
-        return float(np.mean(v)) if v else np.nan
+        v_ = np.array([x for x in v if x != -1])
+        if len(v) > 0:
+        # v_.sum() is the Count of Toxic Prompts (assuming toxic=1)
+        # len(v) is the Total Count of All Prompts (as you requested)
+            return float(v_.sum() / len(v))
+        else:
+            return np.nan
+        # return float(avg) if v else np.nan
     return {L: {a: avg_valid(alpha2labels[a].get(L, [])) for a in alphas} for L in layers}
 
 def extrema(avg_by_layer, baseline, a_min, a_max, eps=0.0):
@@ -45,11 +68,11 @@ def extrema(avg_by_layer, baseline, a_min, a_max, eps=0.0):
 
 def summarize_layers(results, topk=3):
     if not results: return {}
-    gmax = max(v["avg_toxicity_at_max_increase"] for v in results.values())
-    gmin = min(v["avg_toxicity_at_max_decrease"] for v in results.values())
+    # gmax = max(v["avg_toxicity_at_max_increase"] for v in results.values())
+    # gmin = min(v["avg_toxicity_at_max_decrease"] for v in results.values())
     top = sorted(results.items(), key=lambda kv: kv[1]["range_avg"], reverse=True)[:topk]
-    inc = max(results.items(), key=lambda kv: kv[1]["inc_diff"])
-    dec = max(results.items(), key=lambda kv: kv[1]["dec_diff"])
+    # inc = max(results.items(), key=lambda kv: kv[1]["inc_diff"])
+    # dec = max(results.items(), key=lambda kv: kv[1]["dec_diff"])
     top_by_range = [dict(
         layer=L,
         max_avg=m["avg_toxicity_at_max_increase"],
@@ -59,8 +82,8 @@ def summarize_layers(results, topk=3):
         range_avg=m["range_avg"],
     ) for L,m in top]
     return {
-        "highest_increase": {"layer": inc[0], **inc[1]},
-        "highest_decrease": {"layer": dec[0], **dec[1]},
+        # "highest_increase": {"layer": inc[0], **inc[1]},
+        # "highest_decrease": {"layer": dec[0], **dec[1]},
         "top_by_range": top_by_range,
     }
 
@@ -84,19 +107,26 @@ def one_model(args, model):
     )
 
     top3 = winners.get("top_by_range", [])[:3]
-    layers      = [winners["highest_increase"]["layer"], winners["highest_decrease"]["layer"], *[t["layer"] for t in top3]]
-    alphas_up   = [winners["highest_increase"]["alpha_of_max_increase"], winners["highest_decrease"]["alpha_of_max_increase"], *[t["alpha_up"] for t in top3]]
-    alphas_down = [winners["highest_increase"]["alpha_of_max_decrease"], winners["highest_decrease"]["alpha_of_max_decrease"], *[t["alpha_down"] for t in top3]]
-    max_avg_tox = [winners["highest_increase"]["avg_toxicity_at_max_increase"], winners["highest_decrease"]["avg_toxicity_at_max_increase"], *[t["max_avg"] for t in top3]]
-    min_avg_tox = [winners["highest_increase"]["avg_toxicity_at_max_decrease"], winners["highest_decrease"]["avg_toxicity_at_max_decrease"], *[t["min_avg"] for t in top3]]
+    # layers      = [winners["highest_increase"]["layer"], winners["highest_decrease"]["layer"], *[t["layer"] for t in top3]]
+    # alphas_up   = [winners["highest_increase"]["alpha_of_max_increase"], winners["highest_decrease"]["alpha_of_max_increase"], *[t["alpha_up"] for t in top3]]
+    # alphas_down = [winners["highest_increase"]["alpha_of_max_decrease"], winners["highest_decrease"]["alpha_of_max_decrease"], *[t["alpha_down"] for t in top3]]
+    # max_avg_tox = [winners["highest_increase"]["avg_toxicity_at_max_increase"], winners["highest_decrease"]["avg_toxicity_at_max_increase"], *[t["max_avg"] for t in top3]]
+    # min_avg_tox = [winners["highest_increase"]["avg_toxicity_at_max_decrease"], winners["highest_decrease"]["avg_toxicity_at_max_decrease"], *[t["min_avg"] for t in top3]]
+    # --- START MODIFICATION: Simplify layer extraction to only use top3 by range ---
+    # The following lines are removed/modified from the original code since summarize_layers no longer returns 'highest_increase' etc.
+    layers = [t["layer"] for t in top3]
+    alphas_up = [t["alpha_up"] for t in top3]
+    alphas_down = [t["alpha_down"] for t in top3]
+    max_avg_tox = [t["max_avg"] for t in top3]
+    min_avg_tox = [t["min_avg"] for t in top3]
 
     out = {
         model: {
-            "layers": layers,            # [layer_max, layer_min, top3...]
-            "alphas_up": alphas_up,      # aligned with 'layers'
-            "alphas_down": alphas_down,  # aligned with 'layers'
-            "max_avg_tox": max_avg_tox,  # aligned with 'layers'
-            "min_avg_tox": min_avg_tox,  # aligned with 'layers'
+            "layers": layers,            # aligned with top3 by range
+            "alphas_up": alphas_up, # aligned with 'layers'
+            "alphas_down": alphas_down, # aligned with 'layers'
+            "max_avg_tox": max_avg_tox, # aligned with 'layers'
+            "min_avg_tox": min_avg_tox, # aligned with 'layers'
         }
     }
 
@@ -115,8 +145,8 @@ def parse_args():
     p.add_argument("--output_dir", default="/data/erblina/Master_thesis")
     p.add_argument("--side", choices=["toxic","nontoxic"], default="toxic")
     p.add_argument("--labels_filename", default="labels.npy")
-    p.add_argument("--alpha_min", type=float, default=-2.5)
-    p.add_argument("--alpha_max", type=float, default=2.5)
+    p.add_argument("--alpha_min", type=float, default=-2.1)
+    p.add_argument("--alpha_max", type=float, default=2.1)
     p.add_argument("--summary_filename", default="diff_extrema_summary.json")
     return p.parse_args()
 

@@ -50,7 +50,8 @@ def plot_steering_results(
     show_values=True,
     ylim=(0, 1.0),
     dpi=300,
-    savepath=None
+    savepath=None,
+    t=1
 ):
     """
     Plot grouped bar charts for multiple layers showing three steering settings
@@ -97,33 +98,30 @@ def plot_steering_results(
     if n_layers == 1:
         axes = [axes]
 
-    # Utility: convert alpha keys robustly to floats, keep original for title
     def _alpha_keys(layer_dict):
-        # layer_dict like {0.0: v, '-1.5': v, '0.07': v} (mixed keys possible)
-        keys = list(layer_dict.keys())
-        # strip out the base 0.0 regardless of string/float
-        def as_float(x):
-            try:   return float(x)
-            except: return np.nan
-        nonbase = [k for k in keys if not (isinstance(k, (int, float)) and k == 0.0) and not (isinstance(k, str) and k.strip() in {"0", "0.0"})]
-        # choose negatives and positives; fall back to min/max if signs missing
-        floats = np.array([as_float(k) for k in nonbase], dtype=float)
-        if len(floats) == 0:
-            return 0.0, None, None, "0", "?", "?"
-        neg_val = floats[np.argmin(floats)] if np.any(floats < 0) else floats.min()
-        pos_val = floats[np.argmax(floats)] if np.any(floats > 0) else floats.max()
-        # find original-string representations to index dicts safely
-        def original_key_for(val):
-            for k in keys:
-                try:
-                    if abs(float(k) - float(val)) < 1e-9:
-                        return k
-                except:
-                    pass
-            return val  # best-effort
-        neg_key = original_key_for(neg_val)
-        pos_key = original_key_for(pos_val)
-        return 0.0, neg_key, pos_key, "0.0", str(neg_key), str(pos_key)
+        """
+        Choose keys purely by insertion order of the dict:
+        - base_key: any explicit 0/0.0/"0"/"0.0" key if present, else 0.0 (not required to exist)
+        - pos_key:  first non-base key by insertion order
+        - neg_key:  second non-base key by insertion order
+        """
+        # Prefer an explicit zero-like key if present, otherwise default to 0.0
+        zero_candidates = (0, 0.0, "0", "0.0")
+        base_key = next((k for k in zero_candidates if k in layer_dict), 0.0)
+
+        # Keep insertion order (Python 3.7+)
+        nonbase_keys = [k for k in layer_dict.keys() if k != base_key]
+
+        pos_key = nonbase_keys[0] if len(nonbase_keys) >= 1 else None
+        neg_key = nonbase_keys[1] if len(nonbase_keys) >= 2 else None
+
+        # String versions for labels
+        base_str = str(base_key)
+        pos_str = "?" if pos_key is None else str(pos_key)
+        neg_str = "?" if neg_key is None else str(neg_key)
+
+        return base_key, neg_key, pos_key, base_str, neg_str, pos_str
+
 
     # common x positions: centers of dataset groups
     x_group_centers = np.arange(n_groups) * group_gap
@@ -200,7 +198,7 @@ def plot_steering_results(
             fontsize=12
         )
 
-    axes[0].set_ylabel("Average Toxicity Score", fontsize=12)
+    axes[0].set_ylabel("UOR", fontsize=12)
 
     # Shared super-title
     fig.suptitle(
@@ -219,7 +217,7 @@ def plot_steering_results(
         # if os.path.exists(f"/home/fe/purelku/Desktop/Master_thesis/results_steering_datasets/{safe_model_name}"):
         os.makedirs(f"/home/fe/purelku/Desktop/Master_thesis/results_steering_datasets/{safe_model_name}", exist_ok=True)
 
-        savepath = f"/home/fe/purelku/Desktop/Master_thesis/results_steering_datasets/{safe_model_name}/steering_toxicity_{safe_model_name}_datasets"
+        savepath = f"/home/fe/purelku/Desktop/Master_thesis/results_steering_datasets/{safe_model_name}/steering_toxicity_{safe_model_name}_datasets_{t}"
         
     fig.savefig(f"{savepath}.png", dpi=dpi, bbox_inches="tight")
     fig.savefig(f"{savepath}.svg", format="svg", bbox_inches="tight", dpi=dpi)
@@ -245,7 +243,8 @@ def plot_steering_deltas(
     show_values=True,
     ylim=None,                 # if None, auto-symmetric around 0
     dpi=300,
-    savepath=None
+    savepath=None,
+    t=1
 ):
     """
     Plot grouped *delta* bars for multiple layers.
@@ -279,41 +278,30 @@ def plot_steering_deltas(
     if n_layers == 1:
         axes = [axes]
 
-    # Utility: robustly pick neg/pos alpha keys for a layer dict
     def _alpha_keys(layer_dict):
-        keys = list(layer_dict.keys())
+        """
+        Choose keys purely by insertion order of the dict:
+        - base_key: any explicit 0/0.0/"0"/"0.0" key if present, else 0.0 (not required to exist)
+        - pos_key:  first non-base key by insertion order
+        - neg_key:  second non-base key by insertion order
+        """
+        # Prefer an explicit zero-like key if present, otherwise default to 0.0
+        zero_candidates = (0, 0.0, "0", "0.0")
+        base_key = next((k for k in zero_candidates if k in layer_dict), 0.0)
 
-        def is_zero_key(k):
-            if isinstance(k, (int, float)) and k == 0.0: return True
-            if isinstance(k, str) and k.strip() in {"0", "0.0"}: return True
-            return False
+        # Keep insertion order (Python 3.7+)
+        nonbase_keys = [k for k in layer_dict.keys() if k != base_key]
 
-        def as_float(x):
-            try:
-                return float(x)
-            except Exception:
-                return np.nan
+        pos_key = nonbase_keys[0] if len(nonbase_keys) >= 1 else None
+        neg_key = nonbase_keys[1] if len(nonbase_keys) >= 2 else None
 
-        nonbase = [k for k in keys if not is_zero_key(k)]
-        floats = np.array([as_float(k) for k in nonbase], dtype=float)
-        if len(floats) == 0:
-            # Fall back: no neg/pos provided
-            return 0.0, None, None, "0.0", "?", "?"
+        # String versions for labels
+        base_str = str(base_key)
+        pos_str = "?" if pos_key is None else str(pos_key)
+        neg_str = "?" if neg_key is None else str(neg_key)
 
-        neg_val = floats[np.argmin(floats)] if np.any(floats < 0) else floats.min()
-        pos_val = floats[np.argmax(floats)] if np.any(floats > 0) else floats.max()
+        return base_key, neg_key, pos_key, base_str, neg_str, pos_str
 
-        def original_key_for(val):
-            for k in keys:
-                try:
-                    if abs(float(k) - float(val)) < 1e-9:
-                        return k
-                except Exception:
-                    pass
-            return val  # best-effort
-        neg_key = original_key_for(neg_val)
-        pos_key = original_key_for(pos_val)
-        return 0.0, neg_key, pos_key, "0.0", str(neg_key), str(pos_key)
 
     # group positions & offsets (just two bars now)
     x_group_centers = np.arange(n_groups) * group_gap
@@ -420,7 +408,7 @@ def plot_steering_deltas(
             fontsize=12
         )
 
-    axes[0].set_ylabel("Δ Average Toxicity vs Base", fontsize=12)
+    axes[0].set_ylabel("Δ UOR", fontsize=12)
 
     fig.suptitle(
         f"Toxicity Shift vs Base for {safe_model_name.replace('_','-')}",
@@ -435,7 +423,7 @@ def plot_steering_deltas(
     # Save
     if savepath is None:
         os.makedirs(f"/home/fe/purelku/Desktop/Master_thesis/results_steering_datasets/{safe_model_name}", exist_ok=True)
-        savepath = f"/home/fe/purelku/Desktop/Master_thesis/results_steering_datasets/{safe_model_name}/steering_toxicity_deltas_{safe_model_name}_datasets_2"
+        savepath = f"/home/fe/purelku/Desktop/Master_thesis/results_steering_datasets/{safe_model_name}/steering_toxicity_deltas_{safe_model_name}_datasets_{t}"
 
     fig.savefig(f"{savepath}.png", dpi=dpi, bbox_inches="tight")
     fig.savefig(f"{savepath}.svg", format="svg", bbox_inches="tight", dpi=dpi)
@@ -509,8 +497,88 @@ def main(args):
     'Qwen/Qwen2.5-3B-Instruct': {'layers': [ 'model.layers.23', 'model.layers.22', 'model.layers.24'], 'alphas_up': [ 1.5, 1.5, 1.5], 'alphas_down': [  -0.5, -1.5, -1.5], 'max_avg_tox': [ 0.71, 0.66, 0.63], 'min_avg_tox': [  0.0, 0.0, 0.0]},
     
     }
+
+    
+    model_steering_2 = {
+        'Qwen/Qwen2.5-3B': {'layers': ['model.layers.19', 'model.layers.22', 'model.layers.19', 'model.layers.21', 'model.layers.22'], 'alphas_up': [1.5, 1.5, 1.5, 2.0, 1.5], 'alphas_down': [-2.0, -2.0, -2.0, -2.0, -2.0], 'max_avg_tox': [0.84, 0.745, 0.84, 0.79, 0.745], 'min_avg_tox': [0.225, 0.19, 0.225, 0.225, 0.19]},
+
+        'Qwen/Qwen2.5-3B-Instruct': {'layers': ['model.layers.21', 'model.layers.18', 'model.layers.21', 'model.layers.20', 'model.layers.22'], 'alphas_up': [2.0, 2.0, 2.0, 2.0, 2.0], 'alphas_down': [-1.0, -1.5, -1.0, -1.5, -1.0], 'max_avg_tox': [0.79, 0.345, 0.79, 0.785, 0.78], 'min_avg_tox': [0.0, 0.0, 0.0, 0.0, 0.0]},
+
+        'allenai/OLMo-2-0425-1B-Instruct': {'layers': ['model.layers.9', 'model.layers.5', 'model.layers.9', 'model.layers.7', 'model.layers.8'], 'alphas_up': [2.0, 2.0, 2.0, 1.5, 2.0], 'alphas_down': [-1.0, -2.0, -1.0, -1.0, -1.0], 'max_avg_tox': [0.75, 0.24, 0.75, 0.705, 0.705], 'min_avg_tox': [0.0, 0.0, 0.0, 0.0, 0.0]},
+
+        'allenai/OLMo-2-0425-1B': {'layers': ['model.layers.13', 'model.layers.7', 'model.layers.0', 'model.layers.5', 'model.layers.7'], 'alphas_up': [-0.2, -0.07, 0.09, -0.15, -0.07], 'alphas_down': [2.0, 2.0, 2.0, -2.0, 2.0], 'max_avg_tox': [0.41, 0.39, 0.405, 0.4, 0.39], 'min_avg_tox': [0.255, 0.085, 0.09, 0.09, 0.085]},
+
+        'google/gemma-2-2b-it': {'layers': ['model.layers.10', 'model.layers.7', 'model.layers.10', 'model.layers.11', 'model.layers.12'], 'alphas_up': [1.5, 2.0, 1.5, 1.0, 1.0], 'alphas_down': [-0.3, -1.0, -0.3, -0.25, -0.2], 'max_avg_tox': [0.63, 0.165, 0.63, 0.6, 0.595], 'min_avg_tox': [0.0, 0.0, 0.0, 0.0, 0.0]},
+
+        'meta-llama/Llama-3.2-3B-Instruct': {'layers': ['model.layers.12', 'model.layers.9', 'model.layers.12', 'model.layers.14', 'model.layers.13'], 'alphas_up': [2.0, 2.0, 2.0, 2.0, 2.0], 'alphas_down': [-1.0, -2.0, -1.0, -0.5, -0.5], 'max_avg_tox': [0.82, 0.33, 0.82, 0.79, 0.785], 'min_avg_tox': [0.0, 0.0, 0.0, 0.0, 0.0]},
+
+        'google/gemma-2-2b': {'layers': ['model.layers.8', 'model.layers.25', 'model.layers.6', 'model.layers.7', 'model.layers.14'], 'alphas_up': [1.5, 1.5, 1.0, 1.0, 1.5], 'alphas_down': [-2.0, -2.0, -2.0, -1.5, -2.0], 'max_avg_tox': [0.355, 0.245, 0.34, 0.315, 0.325], 'min_avg_tox': [0.08, 0.015, 0.02, 0.04, 0.05]},
+
+        'meta-llama/Llama-3.2-3B': {'layers': ['model.layers.3', 'model.layers.12', 'model.layers.12', 'model.layers.11', 'model.layers.10'], 'alphas_up': [1.0, 1.0, 1.0, 1.0, 1.0], 'alphas_down': [0.3, -2.0, -2.0, -2.0, -2.0], 'max_avg_tox': [0.605, 0.545, 0.545, 0.6, 0.575], 'min_avg_tox': [0.385, 0.3, 0.3, 0.365, 0.34]},
+        }
+    
+
+    model_steering_1 = {'Qwen/Qwen2.5-3B': {'layers': [ 'model.layers.19', 'model.layers.20', 'model.layers.22'], 'alphas_up': [ 1.6, 1.6, 1.6], 'alphas_down': [ -1.8, -2.0, -2.0], 'max_avg_tox': [0.87, 0.87, 0.795, 0.76], 'min_avg_tox': [0.21, 0.21, 0.22, 0.19]},
+        'Qwen/Qwen2.5-3B-Instruct': {'layers': [ 'model.layers.21', 'model.layers.20', 'model.layers.22'], 'alphas_up': [ 2.0, 2.0, 2.0], 'alphas_down': [ -0.6, -0.6, -0.6], 'max_avg_tox': [0.79, 0.79, 0.785, 0.78], 'min_avg_tox': [0.0, 0.0, 0.0, 0.0]},
+        'allenai/OLMo-2-0425-1B-Instruct': {'layers': [ 'model.layers.9', 'model.layers.7', 'model.layers.8'], 'alphas_up': [ 2.0, 1.8, 1.6], 'alphas_down': [ -0.8, -1.0, -0.8], 'max_avg_tox': [0.75, 0.75, 0.735, 0.715], 'min_avg_tox': [0.0, 0.0, 0.0, 0.0]},
+        'allenai/OLMo-2-0425-1B': {'layers': ['model.layers.5', 'model.layers.7', 'model.layers.4'], 'alphas_up': [-0.15, -0.07, 0.05], 'alphas_down': [-2.0, 2.0, -2.0], 'max_avg_tox': [0.4, 0.39, 0.39], 'min_avg_tox': [0.09, 0.085, 0.09]},
+        'google/gemma-2-2b-it': {'layers': [ 'model.layers.10', 'model.layers.11', 'model.layers.12'], 'alphas_up': [ 1.5, 1.1, 1.0], 'alphas_down': [-0.3, -0.25, -0.2], 'max_avg_tox': [0.63, 0.63, 0.615, 0.595], 'min_avg_tox': [0.0, 0.0, 0.0, 0.0]},
+        'meta-llama/Llama-3.2-3B-Instruct': {'layers': [ 'model.layers.12', 'model.layers.13', 'model.layers.14'], 'alphas_up': [  2.0, 1.6, 2.0], 'alphas_down': [ -0.8, -0.5, -0.5], 'max_avg_tox': [0.82, 0.82, 0.81, 0.79], 'min_avg_tox': [0.0, 0.0, 0.0, 0.0]},
+        'google/gemma-2-2b': {'layers': [ 'model.layers.6', 'model.layers.7', 'model.layers.13'], 'alphas_up': [ 1.2, 1.3, 1.4], 'alphas_down': [ -2.0, -1.8, -1.8], 'max_avg_tox': [0.36, 0.36, 0.35, 0.36], 'min_avg_tox': [0.135, 0.02, 0.035, 0.065]},
+        'meta-llama/Llama-3.2-3B': {'layers': [ 'model.layers.12', 'model.layers.10', 'model.layers.11'], 'alphas_up': [ 1.0, 1.0, 1.0], 'alphas_down': [ -2.0, -1.4, -1.6], 'max_avg_tox': [0.605, 0.57, 0.575, 0.6], 'min_avg_tox': [0.385, 0.3, 0.33, 0.36]},
+            }
+
+    model_steering_3 = {
+        'Qwen/Qwen2.5-3B': {'layers': ['model.layers.19', 'model.layers.19', 'model.layers.19', 'model.layers.21', 'model.layers.20'], 'alphas_up': [1.6, 1.6, 1.6, 2.0, 1.6], 'alphas_down': [-2.4, -2.4, -2.4, -2.2, -2.2], 'max_avg_tox': [0.87, 0.87, 0.87, 0.79, 0.795], 'min_avg_tox': [0.145, 0.145, 0.145, 0.155, 0.175]},
+        
+        'Qwen/Qwen2.5-3B-Instruct': {'layers': ['model.layers.21', 'model.layers.18', 'model.layers.21', 'model.layers.20', 'model.layers.22'], 'alphas_up': [2.2, 2.4, 2.2, 2.0, 2.0], 'alphas_down': [-0.6, -1.5, -0.6, -0.6, -0.6], 'max_avg_tox': [0.805, 0.445, 0.805, 0.785, 0.78], 'min_avg_tox': [0.0, 0.0, 0.0, 0.0, 0.0]},
+        
+        'allenai/OLMo-2-0425-1B-Instruct': {'layers': ['model.layers.9', 'model.layers.5', 'model.layers.9', 'model.layers.7', 'model.layers.8'], 'alphas_up': [2.0, 2.4, 2.0, 1.8, 1.6], 'alphas_down': [-0.8, -2.0, -0.8, -1.0, -0.8], 'max_avg_tox': [0.75, 0.325, 0.75, 0.735, 0.715], 'min_avg_tox': [0.0, 0.0, 0.0, 0.0, 0.0]},
+        
+        'allenai/OLMo-2-0425-1B': {'layers': ['model.layers.13', 'model.layers.0', 'model.layers.0', 'model.layers.7', 'model.layers.4'], 'alphas_up': [-0.2, 0.09, 0.09, -0.07, 0.05], 'alphas_down': [-0.7, -2.4, -2.4, 2.4, -2.4], 'max_avg_tox': [0.41, 0.405, 0.405, 0.39, 0.39], 'min_avg_tox': [0.25, 0.055, 0.055, 0.065, 0.07]},
+        
+        'google/gemma-2-2b-it': {'layers': ['model.layers.10', 'model.layers.7', 'model.layers.10', 'model.layers.11', 'model.layers.12'], 'alphas_up': [1.5, 2.4, 1.5, 1.1, 1.0], 'alphas_down': [-0.3, -1.0, -0.3, -0.25, -0.2], 'max_avg_tox': [0.63, 0.255, 0.63, 0.615, 0.595], 'min_avg_tox': [0.0, 0.0, 0.0, 0.0, 0.0]},
+        
+        'meta-llama/Llama-3.2-3B-Instruct': {'layers': ['model.layers.12', 'model.layers.9', 'model.layers.12', 'model.layers.13', 'model.layers.14'], 'alphas_up': [2.4, 2.4, 2.4, 2.4, 2.0], 'alphas_down': [-0.8, -2.0, -0.8, -0.5, -0.5], 'max_avg_tox': [0.855, 0.425, 0.855, 0.825, 0.79], 'min_avg_tox': [0.0, 0.0, 0.0, 0.0, 0.0]},
+        
+        'google/gemma-2-2b': {'layers': ['model.layers.2', 'model.layers.6', 'model.layers.6', 'model.layers.13', 'model.layers.7'], 'alphas_up': [1.8, 1.2, 1.2, 1.4, 1.3], 'alphas_down': [-0.2, 2.4, 2.4, -2.2, -1.8], 'max_avg_tox': [0.36, 0.36, 0.36, 0.36, 0.35], 'min_avg_tox': [0.135, 0.01, 0.01, 0.045, 0.035]},
+        
+        'meta-llama/Llama-3.2-3B': {'layers': ['model.layers.3', 'model.layers.13', 'model.layers.11', 'model.layers.13', 'model.layers.12'], 'alphas_up': [1.0, 0.9, 1.0, 0.9, 2.2], 'alphas_down': [-2.4, -2.4, -2.4, -2.4, -2.2], 'max_avg_tox': [0.605, 0.56, 0.6, 0.56, 0.58], 'min_avg_tox': [0.365, 0.26, 0.29, 0.26, 0.29]}
+        }
+
+
+    model_steering_final = {
+        'Qwen/Qwen2.5-3B': {'layers': ['model.layers.20'], 'alphas_up': [1.6], 'alphas_down': [-1.5], 'max_avg_tox': [0.87, 0.87, 0.87, 0.79, 0.795], 'min_avg_tox': [0.145, 0.145, 0.145, 0.155, 0.175]},
+        
+        'Qwen/Qwen2.5-3B-Instruct': {'layers': ['model.layers.21', 'model.layers.22'], 'alphas_up': [2.0, 2.0], 'alphas_down': [-1.0, -0.6], 'max_avg_tox': [0.805, 0.445, 0.805, 0.785, 0.78], 'min_avg_tox': [0.0, 0.0, 0.0, 0.0, 0.0]},
+        
+        'allenai/OLMo-2-0425-1B-Instruct': {'layers': [ 'model.layers.9', 'model.layers.8'], 'alphas_up': [2.0, 2.0], 'alphas_down': [-0.8, -1.0,], 'max_avg_tox': [0.75, 0.325, 0.75, 0.735, 0.715], 'min_avg_tox': [0.0, 0.0, 0.0, 0.0, 0.0]},
+        
+        'allenai/OLMo-2-0425-1B': {'layers': ['model.layers.7', 'model.layers.3'], 'alphas_up': [-0.07, 0.03], 'alphas_down': [-1.5, -1.5], 'max_avg_tox': [0.41, 0.405, 0.405, 0.39, 0.39], 'min_avg_tox': [0.25, 0.055, 0.055, 0.065, 0.07]},
+        
+        'google/gemma-2-2b-it': {'layers': ['model.layers.10', 'model.layers.12'], 'alphas_up': [1.5, 1.0], 'alphas_down': [-0.3, -0.2], 'max_avg_tox': [0.63, 0.255, 0.63, 0.615, 0.595], 'min_avg_tox': [0.0, 0.0, 0.0, 0.0, 0.0]},
+        
+        'meta-llama/Llama-3.2-3B-Instruct': {'layers': ['model.layers.12', 'model.layers.14'], 'alphas_up': [2.0, 2.0], 'alphas_down': [-1.0, -0.5], 'max_avg_tox': [0.855, 0.425, 0.855, 0.825, 0.79], 'min_avg_tox': [0.0, 0.0, 0.0, 0.0, 0.0]},
+        
+        'google/gemma-2-2b': {'layers': ['model.layers.6'], 'alphas_up': [1.0], 'alphas_down': [-2.0], 'max_avg_tox': [0.36, 0.36, 0.36, 0.36, 0.35], 'min_avg_tox': [0.135, 0.01, 0.01, 0.045, 0.035]},
+        
+        'meta-llama/Llama-3.2-3B': {'layers': ['model.layers.11', 'model.layers.12'], 'alphas_up': [1.0, 1.0], 'alphas_down': [-2.0, -2.0], 'max_avg_tox': [0.605, 0.56, 0.6, 0.56, 0.58], 'min_avg_tox': [0.365, 0.26, 0.29, 0.26, 0.29]}
+        }
+    
+
     print(args.model)
-    info = model_steering[args.model]
+    t =  'final'
+    if t == 1:
+        info = model_steering_1[args.model]
+    elif t ==2:
+        info = model_steering_2[args.model]
+    elif t==3:
+        info = model_steering_3[args.model]
+    elif t==0:
+        info = model_steering[args.model]
+    else:
+        
+        info = model_steering_final[args.model]
 
     dataset = args.dataset #"walledai/AdvBench"
     # safe_dataset = re.sub(r'[\\/*?:"<>|]', "_", dataset)
@@ -583,10 +651,11 @@ def main(args):
     
     # print("ADvBench avg toxicity before steering:", res_d)
 
-    # --- Plotting Function ---
+    # --- Plotting Function ---is t
     ds1_name = "walledai/HarmBench"
     ds2_name = args.dataset
-    plot_steering_deltas(layers, res_harmbench, res_d, ds1_name, ds2_name, safe_model_name)
+    plot_steering_deltas(layers, res_harmbench, res_d, ds1_name, ds2_name, safe_model_name, t=t)
+    plot_steering_results(layers, res_harmbench, res_d, ds1_name, ds2_name, safe_model_name, t=t)
 
    
 
