@@ -406,13 +406,25 @@ model_steering_last = {'Qwen/Qwen2.5-3B': {'layers': ['model.layers.19', 'model.
 'meta-llama/Llama-3.2-3B-Instruct': {'layers': ['model.layers.13', 'model.layers.14', 'model.layers.16'], 'alphas_up': [2.0, 2.0, 1.8], 'alphas_down': [-1.1, -1.3, -1.1], 'max_avg_tox': [0.685, 0.65, 0.655], 'min_avg_tox': [0.0, 0.0, 0.005]},
 'google/gemma-2-2b': {'layers': ['model.layers.7', 'model.layers.6', 'model.layers.12'], 'alphas_up': [1.4, 1.4, 1.2], 'alphas_down': [-2.0, -1.8, -1.5], 'max_avg_tox': [0.4, 0.3, 0.325], 'min_avg_tox': [0.05, 0.03, 0.07]},
 'meta-llama/Llama-3.2-3B': {'layers': ['model.layers.10', 'model.layers.11', 'model.layers.7'], 'alphas_up': [1.8, 1.3, 1.4], 'alphas_down': [-2.0, -1.8, -1.2], 'max_avg_tox': [0.56, 0.59, 0.575], 'min_avg_tox': [0.335, 0.37, 0.375]}}
+
+model_steering_last_2 = {'Qwen/Qwen2.5-3B': {'layers': ['model.layers.19', 'model.layers.20', 'model.layers.21'], 'alphas_up': [2.2, 1.6, 2.5], 'alphas_down': [-2.5, -3.0, -3.0], 'max_avg_tox': [0.85, 0.785, 0.795], 'min_avg_tox': [0.245, 0.185, 0.195]},
+'Qwen/Qwen2.5-3B-Instruct': {'layers': ['model.layers.24', 'model.layers.22', 'model.layers.21'], 'alphas_up': [2.2, 2.4, 3.0], 'alphas_down': [-0.9, -0.8, -0.9], 'max_avg_tox': [0.765, 0.715, 0.675], 'min_avg_tox': [0.0, 0.0, 0.0]},
+'allenai/OLMo-2-0425-1B-Instruct': {'layers': ['model.layers.9', 'model.layers.8', 'model.layers.7'], 'alphas_up': [2.2, 2.2, 2.0], 'alphas_down': [-1.0, -0.9, -2.2], 'max_avg_tox': [0.67, 0.65, 0.565], 'min_avg_tox': [0.0, 0.0, 0.0]},
+'allenai/OLMo-2-0425-1B': {'layers': ['model.layers.7', 'model.layers.10', 'model.layers.4'], 'alphas_up': [-0.2, -0.07, -0.3], 'alphas_down': [-3.0, -3.0, -2.4], 'max_avg_tox': [0.41, 0.405, 0.4], 'min_avg_tox': [0.065, 0.11, 0.11]},
+'google/gemma-2-2b-it': {'layers': ['model.layers.25', 'model.layers.24', 'model.layers.10'], 'alphas_up': [0.9, 0.9, 2.2], 'alphas_down': [-0.3, -0.5, -2.2], 'max_avg_tox': [0.42, 0.385, 0.26], 'min_avg_tox': [0.0, 0.0, 0.0]},
+'meta-llama/Llama-3.2-3B-Instruct': {'layers': ['model.layers.13', 'model.layers.14', 'model.layers.17'], 'alphas_up': [3.0, 2.2, 2.2], 'alphas_down': [-1.1, -1.3, -2.4], 'max_avg_tox': [0.755, 0.665, 0.66], 'min_avg_tox': [0.0, 0.0, 0.0]},
+'google/gemma-2-2b': {'layers': ['model.layers.7', 'model.layers.13', 'model.layers.6'], 'alphas_up': [1.4, 2.4, 1.4], 'alphas_down': [-2.2, -2.4, -3.0], 'max_avg_tox': [0.4, 0.34, 0.3], 'min_avg_tox': [0.03, 0.045, 0.01]},
+'meta-llama/Llama-3.2-3B': {'layers': ['model.layers.11', 'model.layers.8', 'model.layers.13'], 'alphas_up': [1.3, 3.0, 2.2], 'alphas_down': [-2.4, -2.4, -2.2], 'max_avg_tox': [0.59, 0.59, 0.575], 'min_avg_tox': [0.26, 0.325, 0.32]}}
+
+
+
 if __name__ == "__main__":
     
     args = parse_args()
     # main(args)
 
 
-    info = model_steering_last[args.model]
+    info = model_steering_last_2[args.model]
     layers = info['layers']
     alpha_pos = info['alphas_up']
     alpha_neg = info['alphas_down']
