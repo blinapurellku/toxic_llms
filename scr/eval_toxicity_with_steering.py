@@ -107,7 +107,7 @@ def main(args):
     print(device)
     model, tokenizer = load_model_and_tokenizer(args.model, device, args.base_model, bnb_config=bnb_config_1)
     pad_token_id = tokenizer.pad_token_id  # Save this for later use
-
+    
     template = None
     if not args.base_model:
         template = get_template(
@@ -142,13 +142,19 @@ def main(args):
 
     # layer_names = [args.steer_layer] #list(steering_vector.keys())
     alpha = args.alpha if hasattr(args, 'alpha') else 1.0
-    
+    mode = 'last'
     if args.dataset == "walledai/HarmBench":
         layer_names = list(steering_vector.keys()) 
     else:
         layer_names = [args.steer_layer]
 
     print(len(layer_names), "layers to steer")
+    if mode == 'last':
+        out_dir = f"{args.output_dir}/last"
+    else:
+        out_dir = args.output_dir
+
+    os.makedirs(f"{out_dir}/{safe_model_name}", exist_ok=True)
 
     for layer_name in layer_names: 
 
@@ -160,16 +166,16 @@ def main(args):
         
         
         if args.dataset == "walledai/HarmBench":
-            saved_path = f"{args.output_dir}/{safe_model_name}/{layer_name}__alpha_{alpha}.json.zst" 
+            saved_path = f"{out_dir}/{safe_model_name}/{layer_name}__alpha_{alpha}.json.zst" 
             data = None
 
         else:
-            saved_path = f"{args.output_dir}/{safe_model_name}/{safe_dataset}__{layer_name}__alpha_{alpha}.json.zst"
+            saved_path = f"{out_dir}/{safe_model_name}/{safe_dataset}__{layer_name}__alpha_{alpha}.json.zst"
             data = safe_dataset
             
 
         if os.path.exists(saved_path):
-            filtered_prompts, filtered_responses = load_prompts_responses(args.output_dir, args.model, data, layer_name, alpha)
+            filtered_prompts, filtered_responses = load_prompts_responses(out_dir, args.model, data, layer_name, alpha)
             print(f"Generated {len(filtered_prompts)} valid responses out of {len(filtered_prompts)} prompts.")
             print(f"Generated {len(filtered_responses)} valid responses out of {len(filtered_responses)} total responses.")
             responses_after[layer_name] = filtered_responses
@@ -177,7 +183,7 @@ def main(args):
 
         else:
 
-            handle = steering_vector_hook(name2mod[layer_name], steering_vector_side, alpha=alpha)
+            handle = steering_vector_hook(name2mod[layer_name], steering_vector_side, alpha=alpha, mode=mode)
             # hooks.append(handle)
 
             try:
@@ -208,7 +214,7 @@ def main(args):
                 prompts_after[layer_name] = filtered_prompts
 
                 # Save the prompts and responses
-                save_prompts_responses(args.output_dir, args.model, data, layer_name, alpha, filtered_prompts, filtered_responses)
+                save_prompts_responses(out_dir, args.model, data, layer_name, alpha, filtered_prompts, filtered_responses)
 
             finally:
                 # for h in hooks:
@@ -253,9 +259,9 @@ def main(args):
     cls_model, cls_tokenizer, cls_template, cls_name = load_classifier(args.dataset, device, bnb_config=bnb_config_2)
             
     if args.dataset in "walledai/HarmBench":
-        save_np = f"{args.output_dir}/{safe_model_name}/labels_steering_{side}_alpha_{alpha}.npy"
+        save_np = f"{out_dir}/{safe_model_name}/labels_steering_{side}_alpha_{alpha}.npy"
     else:
-        save_np = f"{args.output_dir}/{safe_model_name}/labels_steering_{side}_alpha_{alpha}_{safe_dataset}_{args.steer_layer}.npy"
+        save_np = f"{out_dir}/{safe_model_name}/labels_steering_{side}_alpha_{alpha}_{safe_dataset}_{args.steer_layer}.npy"
 
    
     if os.path.exists(save_np):
@@ -371,6 +377,8 @@ model_steering_3 = {
     
     'meta-llama/Llama-3.2-3B': {'layers': ['model.layers.3', 'model.layers.13', 'model.layers.11', 'model.layers.13', 'model.layers.12'], 'alphas_up': [1.0, 0.9, 1.0, 0.9, 2.2], 'alphas_down': [-2.4, -2.4, -2.4, -2.4, -2.2], 'max_avg_tox': [0.605, 0.56, 0.6, 0.56, 0.58], 'min_avg_tox': [0.365, 0.26, 0.29, 0.26, 0.29]}
     }
+
+
 model_steering_1 = {'Qwen/Qwen2.5-3B': {'layers': [ 'model.layers.19', 'model.layers.20', 'model.layers.22'], 'alphas_up': [ 1.6, 1.6, 1.6], 'alphas_down': [ -1.8, -2.0, -2.0], 'max_avg_tox': [0.87, 0.87, 0.795, 0.76], 'min_avg_tox': [0.21, 0.21, 0.22, 0.19]},
     'Qwen/Qwen2.5-3B-Instruct': {'layers': [ 'model.layers.21', 'model.layers.20', 'model.layers.22'], 'alphas_up': [ 2.0, 2.0, 2.0], 'alphas_down': [ -0.6, -0.6, -0.6], 'max_avg_tox': [0.79, 0.79, 0.785, 0.78], 'min_avg_tox': [0.0, 0.0, 0.0, 0.0]},
     'allenai/OLMo-2-0425-1B-Instruct': {'layers': [ 'model.layers.9', 'model.layers.7', 'model.layers.8'], 'alphas_up': [ 2.0, 1.8, 1.6], 'alphas_down': [ -0.8, -1.0, -0.8], 'max_avg_tox': [0.75, 0.75, 0.735, 0.715], 'min_avg_tox': [0.0, 0.0, 0.0, 0.0]},
@@ -380,18 +388,31 @@ model_steering_1 = {'Qwen/Qwen2.5-3B': {'layers': [ 'model.layers.19', 'model.la
     'google/gemma-2-2b': {'layers': [ 'model.layers.6', 'model.layers.7', 'model.layers.13'], 'alphas_up': [ 1.2, 1.3, 1.4], 'alphas_down': [ -2.0, -1.8, -1.8], 'max_avg_tox': [0.36, 0.36, 0.35, 0.36], 'min_avg_tox': [0.135, 0.02, 0.035, 0.065]},
     'meta-llama/Llama-3.2-3B': {'layers': [ 'model.layers.12', 'model.layers.10', 'model.layers.11'], 'alphas_up': [ 0.7, 1.0, 1.0], 'alphas_down': [ -2.0, -1.4, -1.6], 'max_avg_tox': [0.605, 0.57, 0.575, 0.6], 'min_avg_tox': [0.385, 0.3, 0.33, 0.36]},
         }
+# model_steering_1 = {'Qwen/Qwen2.5-3B': {'layers': [ 'model.layers.19', 'model.layers.20', 'model.layers.22'], 'alphas_up': [ 1.6, 1.6, 1.6], 'alphas_down': [ -1.8, -2.0, -2.0], 'max_avg_tox': [0.87, 0.87, 0.795, 0.76], 'min_avg_tox': [0.21, 0.21, 0.22, 0.19]},
+#         'Qwen/Qwen2.5-3B-Instruct': {'layers': [ 'model.layers.21', 'model.layers.20', 'model.layers.22'], 'alphas_up': [ 2.0, 2.0, 2.0], 'alphas_down': [ -0.6, -0.6, -0.6], 'max_avg_tox': [0.79, 0.79, 0.785, 0.78], 'min_avg_tox': [0.0, 0.0, 0.0, 0.0]},
+#         'allenai/OLMo-2-0425-1B-Instruct': {'layers': [ 'model.layers.9', 'model.layers.7', 'model.layers.8'], 'alphas_up': [ 2.0, 1.8, 1.6], 'alphas_down': [ -0.8, -1.0, -0.8], 'max_avg_tox': [0.75, 0.75, 0.735, 0.715], 'min_avg_tox': [0.0, 0.0, 0.0, 0.0]},
+#         'allenai/OLMo-2-0425-1B': {'layers': ['model.layers.5', 'model.layers.7', 'model.layers.4'], 'alphas_up': [-0.15, -0.07, 0.05], 'alphas_down': [-2.0, 2.0, -2.0], 'max_avg_tox': [0.4, 0.39, 0.39], 'min_avg_tox': [0.09, 0.085, 0.09]},
+#         'google/gemma-2-2b-it': {'layers': [ 'model.layers.10', 'model.layers.11', 'model.layers.12'], 'alphas_up': [ 1.5, 1.1, 1.0], 'alphas_down': [-0.3, -0.25, -0.2], 'max_avg_tox': [0.63, 0.63, 0.615, 0.595], 'min_avg_tox': [0.0, 0.0, 0.0, 0.0]},
+#         'meta-llama/Llama-3.2-3B-Instruct': {'layers': [ 'model.layers.12', 'model.layers.13', 'model.layers.14'], 'alphas_up': [  2.0, 1.6, 2.0], 'alphas_down': [ -0.8, -0.5, -0.5], 'max_avg_tox': [0.82, 0.82, 0.81, 0.79], 'min_avg_tox': [0.0, 0.0, 0.0, 0.0]},
+#         'google/gemma-2-2b': {'layers': [ 'model.layers.6', 'model.layers.7', 'model.layers.13'], 'alphas_up': [ 1.2, 1.3, 1.4], 'alphas_down': [ -2.0, -1.8, -1.8], 'max_avg_tox': [0.36, 0.36, 0.35, 0.36], 'min_avg_tox': [0.135, 0.02, 0.035, 0.065]},
+#         'meta-llama/Llama-3.2-3B': {'layers': [ 'model.layers.12', 'model.layers.10', 'model.layers.11'], 'alphas_up': [ 0.7, 1.0, 1.0], 'alphas_down': [ -2.0, -1.4, -1.6], 'max_avg_tox': [0.605, 0.57, 0.575, 0.6], 'min_avg_tox': [0.385, 0.3, 0.33, 0.36]},
+#             }
 
-
-
+model_steering_last = {'Qwen/Qwen2.5-3B': {'layers': ['model.layers.19', 'model.layers.22', 'model.layers.20'], 'alphas_up': [2.0, 1.5, 1.6], 'alphas_down': [-1.8, -2.0, -1.5], 'max_avg_tox': [0.82, 0.76, 0.785], 'min_avg_tox': [0.265, 0.265, 0.295]},
+'Qwen/Qwen2.5-3B-Instruct': {'layers': ['model.layers.24', 'model.layers.22', 'model.layers.23'], 'alphas_up': [2.0, 2.0, 2.0], 'alphas_down': [-0.9, -0.8, -0.9], 'max_avg_tox': [0.68, 0.645, 0.645], 'min_avg_tox': [0.0, 0.0, 0.0]},
+'allenai/OLMo-2-0425-1B-Instruct': {'layers': ['model.layers.9', 'model.layers.8', 'model.layers.7'], 'alphas_up': [1.8, 2.0, 2.0], 'alphas_down': [-1.0, -0.9, -1.5], 'max_avg_tox': [0.64, 0.62, 0.565], 'min_avg_tox': [0.0, 0.0, 0.005]},
+'allenai/OLMo-2-0425-1B': {'layers': ['model.layers.7', 'model.layers.5', 'model.layers.4'], 'alphas_up': [-0.2, -0.4, -0.3], 'alphas_down': [2.0, 1.8, -1.8], 'max_avg_tox': [0.41, 0.415, 0.4], 'min_avg_tox': [0.1, 0.14, 0.155]},
+'google/gemma-2-2b-it': {'layers': ['model.layers.25', 'model.layers.24', 'model.layers.9'], 'alphas_up': [0.9, 0.9, 2.0], 'alphas_down': [-0.3, -0.5, -0.2], 'max_avg_tox': [0.42, 0.385, 0.23], 'min_avg_tox': [0.0, 0.0, 0.005]},
+'meta-llama/Llama-3.2-3B-Instruct': {'layers': ['model.layers.13', 'model.layers.14', 'model.layers.16'], 'alphas_up': [2.0, 2.0, 1.8], 'alphas_down': [-1.1, -1.3, -1.1], 'max_avg_tox': [0.685, 0.65, 0.655], 'min_avg_tox': [0.0, 0.0, 0.005]},
+'google/gemma-2-2b': {'layers': ['model.layers.7', 'model.layers.6', 'model.layers.12'], 'alphas_up': [1.4, 1.4, 1.2], 'alphas_down': [-2.0, -1.8, -1.5], 'max_avg_tox': [0.4, 0.3, 0.325], 'min_avg_tox': [0.05, 0.03, 0.07]},
+'meta-llama/Llama-3.2-3B': {'layers': ['model.layers.10', 'model.layers.11', 'model.layers.7'], 'alphas_up': [1.8, 1.3, 1.4], 'alphas_down': [-2.0, -1.8, -1.2], 'max_avg_tox': [0.56, 0.59, 0.575], 'min_avg_tox': [0.335, 0.37, 0.375]}}
 if __name__ == "__main__":
     
     args = parse_args()
-    main(args)
-    # model = "Qwen/Qwen2.5-3B" # "Qwen/Qwen2.5-3B-Instruct" #"google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct"
-    # args.dataset = "walledai/AdvBench" #"truthfulqa/truthful_qa"     ["walledai/AdvBench", "walledai/DTStereotype", "walledai/CatHarmfulQA","walledai/DTToxicity","truthfulqa/truthful_qa"]
+    # main(args)
 
-    # args.cls_model = "allenai/truthfulqa-truth-judge-llama2-7B"
-    info = model_steering_1[args.model]
+
+    info = model_steering_last[args.model]
     layers = info['layers']
     alpha_pos = info['alphas_up']
     alpha_neg = info['alphas_down']

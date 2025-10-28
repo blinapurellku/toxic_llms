@@ -53,6 +53,7 @@ def steering_vector_hook(
     module: torch.nn.Module,
     steer: torch.Tensor, 
     alpha: float = 1.0, 
+    mode: str = "add",
 ) -> torch.utils.hooks.RemovableHandle:
     """
     Register a forward‐hook on `module` that adds `steer` to its output.
@@ -61,21 +62,31 @@ def steering_vector_hook(
     steer = steer.detach()
     def _hook(_m, _inp, out):
         # Handle HF blocks that return tuples (hidden, present, …)
-        tgt = out[0] if isinstance(out, tuple) else out  # (B, L, H)
+        x = out[0] if isinstance(out, tuple) else out  # (B, L, H)
 
         # Broadcast if steer is 1‑D
         add = steer
         if steer.ndim == 1:
             add = steer.unsqueeze(0).unsqueeze(0)  # (1, 1, H)
-        add = add.to(tgt.device)
+        add = add.to(x.device)
 
         # if ATTN_MASK is not None:
         #     # ATTN_MASK: shape (B, L) → (B, L, 1)
-        #     expanded_mask = ATTN_MASK.unsqueeze(-1).to(tgt.device)  # (B, L, 1)
+        #     expanded_mask = ATTN_MASK.unsqueeze(-1).to(x.device)  # (B, L, 1)
         #     add = add * expanded_mask  # (B, L, H) mask-aware addition
+        if mode == 'last':
+            # Only apply to the last token
+            x_last = x[:, -1:]  # (B, 1, H)
+            mod_last = x_last + alpha * add  # apply steering to last token
 
-        mod = tgt + alpha * add
-        return (mod,) + out[1:] if isinstance(out, tuple) else mod
+            # Replace last token in x with modified one
+            mod = torch.cat([x[:, :-1], mod_last], dim=1)  # (B, L, H)
+
+            # Return in the same format as input
+            return (mod,) + out[1:] if isinstance(out, tuple) else mod
+        else:
+            mod = x + alpha * add
+            return (mod,) + out[1:] if isinstance(out, tuple) else mod
         
     return module.register_forward_hook(_hook)
 
