@@ -567,7 +567,7 @@ def main(args):
     
 
     print(args.model)
-    t =  'final'
+    t =  args.t #'final'
     if t == 1:
         info = model_steering_1[args.model]
     elif t ==2:
@@ -603,14 +603,14 @@ def main(args):
 
     for i, layer in enumerate(layers):
         alpha_neg = alphas_n[i]
-        labels_after_harmbench=np.load(f"{args.output_dir}/{safe_model_name}/labels_steering_{side}_alpha_{alpha_neg}.npy", allow_pickle=True).item()
+        labels_after_harmbench=np.load(f"{args.output_dir}/last/{safe_model_name}/labels_steering_{side}_alpha_{alpha_neg}.npy", allow_pickle=True).item()
         labels_after_harmbench = labels_after_harmbench[layer]
         valid_lab_after = [r for r in labels_after_harmbench if r != -1]
         avg_harmbench_after = sum(valid_lab_after) / len(labels_after_harmbench)
         # print(f"Layer: {layer}, alpha_neg: {alpha_neg}, avg_harmbench_after: {avg_harmbench_after}")
 
         alpha_pos = alphas_p[i]
-        labels_after_harmbench_pos=np.load(f"{args.output_dir}/{safe_model_name}/labels_steering_{side}_alpha_{alpha_pos}.npy", allow_pickle=True).item()
+        labels_after_harmbench_pos=np.load(f"{args.output_dir}/last/{safe_model_name}/labels_steering_{side}_alpha_{alpha_pos}.npy", allow_pickle=True).item()
         labels_after_harmbench_pos = labels_after_harmbench_pos[layer]
         valid_lab_after_pos = [r for r in labels_after_harmbench_pos if r != -1]
         avg_harmbench_after_pos = sum(valid_lab_after_pos) / len(labels_after_harmbench_pos)
@@ -633,14 +633,14 @@ def main(args):
         for i, layer in enumerate(layers):
             alpha_neg = alphas_n[i]
 
-            labels_after_d=np.load(f"{args.output_dir}/{safe_model_name}/labels_steering_{side}_alpha_{alpha_neg}_{safe_dataset}_{layer}.npy", allow_pickle=True).item()
+            labels_after_d=np.load(f"{args.output_dir}/last/{safe_model_name}/labels_steering_{side}_alpha_{alpha_neg}_{safe_dataset}_{layer}.npy", allow_pickle=True).item()
             labels_after_d = labels_after_d[layer]
             valid_lab_after_d = [r for r in labels_after_d if r != -1]
             avg_d_after = sum(valid_lab_after_d) / len(labels_after_d)
 
 
             alpha_pos = alphas_p[i]
-            labels_after_d_pos=np.load(f"{args.output_dir}/{safe_model_name}/labels_steering_{side}_alpha_{alpha_pos}_{safe_dataset}_{layer}.npy", allow_pickle=True).item()
+            labels_after_d_pos=np.load(f"{args.output_dir}/last/{safe_model_name}/labels_steering_{side}_alpha_{alpha_pos}_{safe_dataset}_{layer}.npy", allow_pickle=True).item()
             labels_after_d_pos = labels_after_d_pos[layer]
             valid_lab_after_d_pos = [r for r in labels_after_d_pos if r != -1]
             avg_d_after_pos = sum(valid_lab_after_d_pos) / len(labels_after_d_pos)
@@ -654,6 +654,8 @@ def main(args):
     # --- Plotting Function ---is t
     ds1_name = "walledai/HarmBench"
     ds2_name = args.dataset
+    t = '1_last'
+    # res_harmbench = res_d[list(res_d.keys())[0]]
     plot_steering_deltas(layers, res_harmbench, res_d, ds1_name, ds2_name, safe_model_name, t=t)
     plot_steering_results(layers, res_harmbench, res_d, ds1_name, ds2_name, safe_model_name, t=t)
 
@@ -685,6 +687,7 @@ if __name__ == "__main__":
     for _, model in enumerate(["Qwen/Qwen2.5-3B", "Qwen/Qwen2.5-3B-Instruct", "google/gemma-2-2b", "meta-llama/Llama-3.2-3B", "allenai/OLMo-2-0425-1B", "google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct", "allenai/OLMo-2-0425-1B-Instruct"]): #"google/gemma-2-2b-it", , "allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO"
         
         args.model = model
+        args.t = 1
         args.dataset = ["walledai/AdvBench", "walledai/DTStereotype", "walledai/CatHarmfulQA","walledai/DTToxicity","truthfulqa/truthful_qa"]
         main(args)
     # "google/gemma-2-2b", "meta-llama/Llama-3.2-3B", "allenai/OLMo-2-0425-1B" "LibrAI/do-not-answer"-this doesn't work
