@@ -97,7 +97,7 @@ def one_model(args, model):
     labels = np.load(labels_path)
     valid = [x for x in labels if x != -1]
     baseline = float(np.mean(valid)) if valid else np.nan
-
+    d = os.path.join(args.output_dir, 'last', safe)
     alpha2labels = load_all_alphas(d, args.side)
     if not alpha2labels: raise RuntimeError(f"No steering files in {d} for side='{args.side}'.")
 

@@ -320,6 +320,15 @@ model_steering = {'Qwen/Qwen2.5-3B': {'layers': [ 'model.layers.19', 'model.laye
             }
 
 
+model_steering_last = {'Qwen/Qwen2.5-3B': {'layers': ['model.layers.19', 'model.layers.22', 'model.layers.20'], 'alphas_up': [2.0, 1.5, 1.6], 'alphas_down': [-1.8, -2.0, -1.5], 'max_avg_tox': [0.82, 0.76, 0.785], 'min_avg_tox': [0.265, 0.265, 0.295]},
+'Qwen/Qwen2.5-3B-Instruct': {'layers': ['model.layers.24', 'model.layers.22', 'model.layers.23'], 'alphas_up': [2.0, 2.0, 2.0], 'alphas_down': [-0.9, -0.8, -0.9], 'max_avg_tox': [0.68, 0.645, 0.645], 'min_avg_tox': [0.0, 0.0, 0.0]},
+'allenai/OLMo-2-0425-1B-Instruct': {'layers': ['model.layers.9', 'model.layers.8', 'model.layers.7'], 'alphas_up': [1.8, 2.0, 2.0], 'alphas_down': [-1.0, -0.9, -1.5], 'max_avg_tox': [0.64, 0.62, 0.565], 'min_avg_tox': [0.0, 0.0, 0.005]},
+'allenai/OLMo-2-0425-1B': {'layers': ['model.layers.7', 'model.layers.5', 'model.layers.4'], 'alphas_up': [-0.2, -0.4, -0.3], 'alphas_down': [2.0, 1.8, -1.8], 'max_avg_tox': [0.41, 0.415, 0.4], 'min_avg_tox': [0.1, 0.14, 0.155]},
+'google/gemma-2-2b-it': {'layers': ['model.layers.25', 'model.layers.24', 'model.layers.9'], 'alphas_up': [0.9, 0.9, 2.0], 'alphas_down': [-0.3, -0.5, -0.2], 'max_avg_tox': [0.42, 0.385, 0.23], 'min_avg_tox': [0.0, 0.0, 0.005]},
+'meta-llama/Llama-3.2-3B-Instruct': {'layers': ['model.layers.13', 'model.layers.14', 'model.layers.16'], 'alphas_up': [2.0, 2.0, 1.8], 'alphas_down': [-1.1, -1.3, -1.1], 'max_avg_tox': [0.685, 0.65, 0.655], 'min_avg_tox': [0.0, 0.0, 0.005]},
+'google/gemma-2-2b': {'layers': ['model.layers.7', 'model.layers.6', 'model.layers.12'], 'alphas_up': [1.4, 1.4, 1.2], 'alphas_down': [-2.0, -1.8, -1.5], 'max_avg_tox': [0.4, 0.3, 0.325], 'min_avg_tox': [0.05, 0.03, 0.07]},
+'meta-llama/Llama-3.2-3B': {'layers': ['model.layers.10', 'model.layers.11', 'model.layers.7'], 'alphas_up': [1.8, 1.3, 1.4], 'alphas_down': [-2.0, -1.8, -1.2], 'max_avg_tox': [0.56, 0.59, 0.575], 'min_avg_tox': [0.335, 0.37, 0.375]}}
+
 if __name__ == "__main__":
     
     # for _, model in enumerate(["google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct"]): #"google/gemma-2-2b-it",
