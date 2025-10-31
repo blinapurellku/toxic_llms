@@ -201,7 +201,8 @@ def find_alpha(x_d, v1, v0, sigma, sigma_inv, method='cosine', epsilon=0.0):
         direc *= torch.norm(x_d, dim=1)
         denom = torch.norm(v1)
         alpha_min = direc / denom
-        return alpha_min
+        print(method, alpha_min.shape)
+        return alpha_min.squeeze().clamp_min(0)
     
     elif method == 'euclidean':
         v1 = v1.unsqueeze(0)
@@ -209,13 +210,15 @@ def find_alpha(x_d, v1, v0, sigma, sigma_inv, method='cosine', epsilon=0.0):
         direc = epsilon / 4 + x_d @ v1.T
         denom = torch.norm(v1)**2
         alpha_min = - direc / denom
-        return alpha_min
+        print(method, alpha_min.shape)
+        return alpha_min.squeeze().clamp_min(0)
     
     elif method == 'projection':
-        direc = epsilon * 0.5 - x_d @ v1.T
+        direc = epsilon * 0.5 - x_d @ v1.T # bxn nx1
         denom = torch.norm(v1)**2
         alpha_min = direc/ denom
-        return alpha_min
+        print(method, alpha_min.shape)
+        return alpha_min.squeeze().clamp_min(0)
     
     elif method == 'mahalanobis':
         v1 = v1.unsqueeze(0)
@@ -227,6 +230,7 @@ def find_alpha(x_d, v1, v0, sigma, sigma_inv, method='cosine', epsilon=0.0):
             # denom = (delta **2).sum() 
             denom = (delta @ v1.T).squeeze()
             alpha_min = - direc.squeeze()/ denom
+
         else:
             L = torch.linalg.cholesky(sigma).to(dtype=dtype)
             
@@ -234,8 +238,12 @@ def find_alpha(x_d, v1, v0, sigma, sigma_inv, method='cosine', epsilon=0.0):
             z = torch.linalg.solve_triangular(L, m.T, upper=False)
             direc = epsilon / 4 + y.T @  z     # [1 x D] * [D x N]  = 1 x N
             denom = (y**2).sum() 
+
             alpha_min = - direc.squeeze()/ denom
-        return alpha_min
+
+        
+        print(method, alpha_min.shape)
+        return alpha_min.squeeze().clamp_min(0)
     else :
         raise ValueError(f"Unknown method: {method}")
     
@@ -330,36 +338,109 @@ def combine_probabilities(prob_dict,y_t, met):
     return combined_probs
 
 
-def fix_alpha_direction(x_d, v1, v0, sigma, sigma_inv, method, epsilon, alpha):
+# def fix_alpha_direction(x_d, v1, v0, sigma, sigma_inv, method, epsilon, alpha):
+#     """
+#     Ensure alpha moves points toward class 1.
+#     Returns signed alphas (same shape as input alpha).
+#     """
+#     # Try both +alpha*v1 and -alpha*v1
+#     alpha = alpha.float() + 0.1
+#     a = alpha.clamp_min(0).unsqueeze(1)          # (N,1)
+#     v1u = v1.unsqueeze(0)
+#     x_plus  = x_d + a * v1u
+#     x_minus = x_d - a * v1u
+
+#     d_plus  = distance_score(x_plus,  v1, v0, sigma, sigma_inv, method=method)
+#     d_minus = distance_score(x_minus, v1, v0, sigma, sigma_inv, method=method)
+
+#     # decide which direction yields class 1
+#     if method in ("cosine", "projection"):       # d > ε → class 1
+#         ok_plus, ok_minus = (d_plus > epsilon), (d_minus > epsilon)
+#         margin_plus  = d_plus  - epsilon
+#         margin_minus = d_minus - epsilon
+#     else:                                        # d < ε → class 1
+#         ok_plus, ok_minus = (d_plus < epsilon), (d_minus < epsilon)
+#         margin_plus  = epsilon - d_plus
+#         margin_minus = epsilon - d_minus
+
+#     # choose the direction
+#     choose_plus  = ok_plus & (~ok_minus)
+#     choose_minus = ok_minus & (~ok_plus)
+#     both_ok      = ok_plus & ok_minus
+#     choose_plus  = choose_plus | (both_ok & (margin_plus >= margin_minus))
+#     choose_minus = choose_minus | (both_ok & (margin_minus >  margin_plus))
+
+#     neither = ~(choose_plus | choose_minus)
+#     better_is_plus = margin_plus >= margin_minus
+#     choose_plus  = choose_plus  | (neither & better_is_plus)
+#     choose_minus = choose_minus | (neither & (~better_is_plus))
+
+#     # sign vector (+1 for toward +v1, –1 for toward –v1)
+#     sign = torch.where(choose_plus, 1.0, -1.0)
+#     return sign * alpha
+
+def fix_alpha_direction(
+    x_d, v1, v0, sigma, sigma_inv, method, epsilon, alpha, d_current=None
+):
     """
-    Ensure alpha moves points toward class 1.
-    Returns signed alphas (same shape as input alpha).
+    Ensure alpha moves points toward class 1 and return signed alphas.
+    Memory-safe for 'euclidean' by using an analytic update instead of building (N,D) tensors.
     """
-    # Try both +alpha*v1 and -alpha*v1
-    alpha = alpha.float() + 0.1
-    a = alpha.clamp_min(0).unsqueeze(1)          # (N,1)
+    alpha = alpha.float() #+ 0.1
+    a = alpha.clamp_min(0)  # (N,)
+
+    if method == "euclidean":
+        # Class 1 when d < epsilon, where d(x) = ||x - v1||^2 - ||x - v0||^2
+        # For a step ±a v1: d(x ± a v1) = d(x) ± 2 a * ((v0 - v1)·v1)
+        if d_current is None:
+            d0 = distance_score(x_d, v1, v0, None, None, method="euclidean")  # (N,)
+        else:
+            d0 = d_current
+
+        beta = torch.dot(v0, v1) - torch.dot(v1, v1)  # scalar
+
+        d_plus  = d0 + 2.0 * a * beta
+        d_minus = d0 - 2.0 * a * beta
+
+        # Choose the direction that yields class 1 (d < epsilon) with larger margin
+        m_plus, m_minus = (epsilon - d_plus), (epsilon - d_minus)
+        ok_plus, ok_minus = (m_plus > 0), (m_minus > 0)
+
+        choose_plus  = ok_plus  & (~ok_minus)
+        choose_minus = ok_minus & (~ok_plus)
+        both_ok      = ok_plus & ok_minus
+        choose_plus  = choose_plus  | (both_ok & (m_plus >= m_minus))
+        choose_minus = choose_minus | (both_ok & (m_minus >  m_plus))
+
+        # If neither works, pick the one closer to epsilon (larger margin)
+        neither = ~(choose_plus | choose_minus)
+        choose_plus  = choose_plus  | (neither & (m_plus >= m_minus))
+        choose_minus = choose_minus | (neither & (m_minus >  m_plus))
+
+        sign = torch.where(choose_plus, 1.0, -1.0)
+        alpha = sign * alpha + 0.1
+        return alpha #.clamp_min(0) ################################### here the change ##############################
+
+    # ---- original path for other methods (cosine/projection/mahalanobis) ----
     v1u = v1.unsqueeze(0)
-    x_plus  = x_d + a * v1u
-    x_minus = x_d - a * v1u
+    a_col = a.unsqueeze(1)  # (N,1)
+    x_plus  = x_d + a_col * v1u
+    x_minus = x_d - a_col * v1u
 
     d_plus  = distance_score(x_plus,  v1, v0, sigma, sigma_inv, method=method)
     d_minus = distance_score(x_minus, v1, v0, sigma, sigma_inv, method=method)
 
-    # decide which direction yields class 1
     if method in ("cosine", "projection"):       # d > ε → class 1
         ok_plus, ok_minus = (d_plus > epsilon), (d_minus > epsilon)
-        margin_plus  = d_plus  - epsilon
-        margin_minus = d_minus - epsilon
-    else:                                        # d < ε → class 1
+        margin_plus, margin_minus = (d_plus - epsilon), (d_minus - epsilon)
+    else:                                        # mahalanobis: d < ε → class 1
         ok_plus, ok_minus = (d_plus < epsilon), (d_minus < epsilon)
-        margin_plus  = epsilon - d_plus
-        margin_minus = epsilon - d_minus
+        margin_plus, margin_minus = (epsilon - d_plus), (epsilon - d_minus)
 
-    # choose the direction
     choose_plus  = ok_plus & (~ok_minus)
     choose_minus = ok_minus & (~ok_plus)
     both_ok      = ok_plus & ok_minus
-    choose_plus  = choose_plus | (both_ok & (margin_plus >= margin_minus))
+    choose_plus  = choose_plus  | (both_ok & (margin_plus >= margin_minus))
     choose_minus = choose_minus | (both_ok & (margin_minus >  margin_plus))
 
     neither = ~(choose_plus | choose_minus)
@@ -367,9 +448,9 @@ def fix_alpha_direction(x_d, v1, v0, sigma, sigma_inv, method, epsilon, alpha):
     choose_plus  = choose_plus  | (neither & better_is_plus)
     choose_minus = choose_minus | (neither & (~better_is_plus))
 
-    # sign vector (+1 for toward +v1, –1 for toward –v1)
     sign = torch.where(choose_plus, 1.0, -1.0)
-    return sign * alpha
+    alpha = sign * alpha + 0.1
+    return alpha
 
 
 def parse_args():
@@ -434,7 +515,7 @@ def plot_metrics(metric, datasets_all, save_dir):
     """
     print('HERE')
     methods = list(metric.keys())
-    metrics_names = ['accuracy', 'precision', 'recall', 'f1']# 'ap_auc'] 
+    metrics_names = ['accuracy', 'precision', 'recall', 'f1', 'balanced_accuracy', 'ap_auc'] 
     n_methods = len(methods)
     n_datasets = len(datasets_all)
     n_metrics = len(metrics_names)
@@ -715,8 +796,9 @@ def main(args):
             y_p2[method].append(y_prob.numpy())
             
 
-            alpha_min = find_alpha(x1, v1, v0, sigma, sigma_inv, method=method, epsilon=epsilon)
-            alpha_mins = fix_alpha_direction(x1, v1, v0, sigma, sigma_inv, method, epsilon, alpha_min)
+            alpha_mins = find_alpha(x1, v1, v0, sigma, sigma_inv, method=method, epsilon=epsilon) + 0.1
+            print('alpha_min calculates')
+            # alpha_mins = fix_alpha_direction(x1, v1, v0, sigma, sigma_inv, method, epsilon, alpha_min)
             print(alpha_mins)
             print("------------------------------------------------------------------------------------")
             print('HarmBench')
@@ -761,8 +843,10 @@ def main(args):
                 y_prob = to_probabilitity_score(dists, epsilon, method=method, k=1.0)
                 y_pred_2 = (y_prob >= 0.5).long()
 
-                alpha_min = find_alpha(x2, v1, v0, sigma, sigma_inv, method=method, epsilon=epsilon)
-                alpha_mins = fix_alpha_direction(x2, v1, v0, sigma, sigma_inv, method, epsilon, alpha_min)
+                alpha_mins = find_alpha(x2, v1, v0, sigma, sigma_inv, method=method, epsilon=epsilon) + 0.1
+                print('alpha_min calculates')
+
+                # alpha_mins = fix_alpha_direction(x2, v1, v0, sigma, sigma_inv, method, epsilon, alpha_min)
                 print("------------------------------------------------------------------------------------")
                 print(dataset)
                 print(f"Method: {method}, Alpha mins: mean {alpha_mins.mean().item():.4f}, std {alpha_mins.std().item():.4f}")
@@ -798,10 +882,13 @@ def main(args):
         for method in list(y_d.keys()):
             for d, data in enumerate(["walledai/HarmBench", "walledai/AdvBench", "walledai/DTStereotype", "walledai/CatHarmfulQA","walledai/DTToxicity","truthfulqa/truthful_qa"]):
                 safe_dataset = re.sub(r'[\\/*?:"<>|]', "_", data)
+                print(args.model)
+                print('ALPHA RESULTS', method)
+                print(data, alphas[method][d].shape)
                 np.save(f"{save_dir}/alphas_{layer_name}_{method}_{safe_dataset}.npy", alphas[method][d])
-                np.save(f"{save_dir}/y_pred_{layer_name}_{method}_{safe_dataset}.npy", y_p[method][d])
-                np.save(f"{save_dir}/y_dists_{layer_name}_{method}_{safe_dataset}.npy", y_d[method][d])
-                np.save(f"{save_dir}/y_prob_{layer_name}_{method}_{safe_dataset}.npy", y_p2[method][d])
+                # np.save(f"{save_dir}/y_pred_{layer_name}_{method}_{safe_dataset}.npy", y_p[method][d])
+                # np.save(f"{save_dir}/y_dists_{layer_name}_{method}_{safe_dataset}.npy", y_d[method][d])
+                # np.save(f"{save_dir}/y_prob_{layer_name}_{method}_{safe_dataset}.npy", y_p2[method][d])
             # np.save(f"{save_dir}/alphas_{layer_name}_{method}.npy", np.array(alphas[method]))
             # np.save(f"{save_dir}/y_pred_{layer_name}_{method}.npy", np.array(y_p[method]))
             # np.save(f"{save_dir}/y_dists_{layer_name}_{method}.npy", np.array(y_d[method]))
@@ -815,8 +902,8 @@ def main(args):
         plot_metrics(metric, datasets_all, save_dir=os.path.join(save_dir, f"{layer_name.replace('.', '_')}_{mode_ocv}"))
         plot_alpha_boxplot(alphas, datasets_all, save_dir=os.path.join(save_dir, f"{layer_name.replace('.', '_')}_{mode_ocv}"))
         
-        for method in list(y_d.keys()):
-            plot_dists_histogram(y_d, y_data, datasets_all, method, save_dir=os.path.join(save_dir, f"{layer_name.replace('.', '_')}_{mode_ocv}"))
+        # for method in list(y_d.keys()):
+        #     plot_dists_histogram(y_d, y_data, datasets_all, method, save_dir=os.path.join(save_dir, f"{layer_name.replace('.', '_')}_{mode_ocv}"))
         #     plot_decision_regions_per_method(
         #     X_list=X_data,
         #     y_list=y_data,

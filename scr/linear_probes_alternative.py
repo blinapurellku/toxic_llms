@@ -447,7 +447,7 @@ def main(args):
             print(hidden_states_data[list(hidden_states_data.keys())[0]].shape)
 
 
-    for layer_name in list(hidden_states_all.keys())[3:]:  # every 8th layer starting from layer 5
+    for layer_name in list(hidden_states_all.keys()):  # every 8th layer starting from layer 5
         X_data = []
         y_data = []
 
@@ -492,8 +492,9 @@ def main(args):
         # X_all = StandardScaler().fit_transform(X_all)
         l = np.concatenate([np.full(len(X_data[i]), i) for i in range(len(X_data))])
 
-        toxic_vector = steering_vector[layer_name]['nontoxic'].float()
-        t = f"{layer_name.replace('.', '_')}_nontox_sv"
+        toxic_vector = steering_vector[layer_name]['toxic'].float()
+        titl = f"{layer_name.replace('.', '_')}_toxic_SV"
+        t = 'toxic'
 
         # toxic_vector = X_data[0][y_data[0]==0].mean(dim=0) #- X_data[0][y_data[0]==0].mean(dim=0)
         # t = f"{layer_name.replace('.', '_')}_tox"
@@ -583,7 +584,7 @@ def main(args):
         ax.set_xticklabels(datasets_all, rotation=45, ha="right")
 
         # Labels & legend
-        ax.set_ylabel("cosine sim with toxic sv")
+        ax.set_ylabel(f"cosine sim with sv ({t})")
         ax.set_title(f"Similarity per dataset ({layer_name})")
         ax.axhline(0, color="gray", linestyle="--", linewidth=1)
         # ax.legend([bp0["boxes"][0], bp1["boxes"][0]], ["y=0", "y=1"], loc="upper right")
@@ -641,7 +642,7 @@ def main(args):
         ax.set_xticklabels(datasets_all, rotation=45, ha="right")
 
         # Labels & legend
-        ax.set_ylabel("Spearman corr with toxic sv")
+        ax.set_ylabel(f"Spearman corr with sv ({t})")
         ax.set_title(f"Similarity per dataset ({layer_name})")
         ax.axhline(0, color="gray", linestyle="--", linewidth=1)
         # ax.legend([bp0["boxes"][0], bp1["boxes"][0]], ["y=0", "y=1"], loc="upper right")
@@ -700,7 +701,7 @@ def main(args):
         ax.set_xticklabels(datasets_all, rotation=45, ha="right")
 
         # Labels & legend
-        ax.set_ylabel("Pearson corr with nontoxic sv")
+        ax.set_ylabel(f"Pearson corr with sv ({t})")
         ax.set_title(f"Similarity per dataset ({layer_name})")
         ax.axhline(0, color="gray", linestyle="--", linewidth=1)
         axs[2].legend([bp0["boxes"][0], bp1["boxes"][0]], ["y=0", "y=1"], loc="upper right")
@@ -708,10 +709,10 @@ def main(args):
         plt.tight_layout()
         plt.show()
 
-        os.makedirs(f"/home/fe/purelku/Desktop/Master_thesis/statistical_analysis/{safe_model_name}", exist_ok=True)
+        os.makedirs(f"/home/fe/purelku/Desktop/Master_thesis/statistical_analysis_all/{safe_model_name}", exist_ok=True)
 
         plt.savefig(
-            f"/home/fe/purelku/Desktop/Master_thesis/statistical_analysis/{safe_model_name}/statistical_analysis_layer_{t}.png",
+            f"/home/fe/purelku/Desktop/Master_thesis/statistical_analysis_all/{safe_model_name}/statistical_analysis_layer_{titl}.png",
             dpi=300
         )
         plt.close(fig)
@@ -750,7 +751,7 @@ def main(args):
                 ax=ax
             )
 
-        ax.set_xlabel("cosinesim with sv (nontoxic)")
+        ax.set_xlabel(f"cosinesim with sv ({t})")
         ax.set_ylabel("Density")
         ax.set_title(f"1D density, {layer_name}")
         
@@ -783,7 +784,7 @@ def main(args):
                 ax=ax
             )
 
-        ax.set_xlabel("Spearman corr with sv (nontoxic)")
+        ax.set_xlabel(f"Spearman corr with sv ({t})")
         ax.set_ylabel("Density")
         ax.set_title(f"1D density, {layer_name}")
 
@@ -821,19 +822,226 @@ def main(args):
                 ax=ax
             )
 
-        ax.set_xlabel("Pearson corr with sv (nontoxic)")
+        ax.set_xlabel(f"Pearson corr with sv ({t})")
         ax.set_ylabel("Density")
         ax.set_title(f"1D density, {layer_name}")
         axs[2].legend(title="Datasets", fontsize=8)
         
         plt.tight_layout()
         plt.savefig(
-            f"/home/fe/purelku/Desktop/Master_thesis/statistical_analysis/{safe_model_name}/density_estimation_{t}.png",
+            f"/home/fe/purelku/Desktop/Master_thesis/statistical_analysis_all/{safe_model_name}/density_estimation_{titl}.png",
             dpi=300
         )
         plt.close(fig)
 
+########################################################################################################################################
+        fig, axs = plt.subplots(3, 1, figsize=(6, 12), constrained_layout=True)
+        ax=axs[0]
+        # Split into positive and negative classes per dataset
+        cosine_sim_0 = np.concatenate([cos[y_data[i] == 0] for i, cos in enumerate(cosine_sims_all)])
+        cosine_sim_1 = np.concatenate([cos[y_data[i] == 1] for i, cos in enumerate(cosine_sims_all)])
+        print("Combined shapes:")
+        print(cosine_sim_0.shape, cosine_sim_1.shape)
 
+
+        bp = ax.boxplot(
+            [cosine_sim_0, cosine_sim_1],      # two groups in one call
+            positions=[0, 1],
+            widths=0.5,
+            patch_artist=True,
+            boxprops=dict(linewidth=1.0),
+            medianprops=dict(color="black", linewidth=1.0),
+            whiskerprops=dict(linewidth=1),
+            capprops=dict(linewidth=1),
+        )
+
+        # Colors
+        bp['boxes'][0].set_facecolor("#27AE60")  # green for class 0
+        bp['boxes'][1].set_facecolor("#EB5757")  # red for class 1
+        for b in bp['boxes']:
+            b.set_alpha(0.7)
+
+        # X-axis ticks
+        ax.set_xticks([0, 1])
+        ax.set_xticklabels(['Class 0', 'Class 1'], rotation=45, ha="right")
+
+        # Labels & legend
+        ax.set_ylabel(f"cosine sim with sv ({t})")
+        ax.set_title(f"Similarity per dataset ({layer_name})")
+        ax.axhline(0, color="gray", linestyle="--", linewidth=1)
+        # ax.legend([bp0["boxes"][0], bp1["boxes"][0]], ["y=0", "y=1"], loc="upper right")
+
+        ax=axs[1]
+        cosine_sim_0 = np.concatenate([cos[y_data[i] == 0] for i, cos in enumerate(spearman)]) #(cosine_sims_all)]
+        cosine_sim_1 = np.concatenate([cos[y_data[i] == 1] for i, cos in enumerate(spearman)]) #(cosine_sims_all)
+
+        bp = ax.boxplot(
+            [cosine_sim_0, cosine_sim_1],      # two groups in one call
+            positions=[0, 1],
+            widths=0.5,
+            patch_artist=True,
+            boxprops=dict(linewidth=1.0),
+            medianprops=dict(color="black", linewidth=1.0),
+            whiskerprops=dict(linewidth=1),
+            capprops=dict(linewidth=1),
+        )
+
+        # Colors
+        bp['boxes'][0].set_facecolor("#27AE60")  # green for class 0
+        bp['boxes'][1].set_facecolor("#EB5757")  # red for class 1
+        for b in bp['boxes']:
+            b.set_alpha(0.7)
+
+        # X-axis ticks
+        ax.set_xticks([0, 1])
+        ax.set_xticklabels(['Class 0', 'Class 1'], rotation=45, ha="right")
+
+        # Labels & legend
+        ax.set_ylabel(f"Spearman corr with sv ({t})")
+        ax.set_title(f"Similarity per dataset ({layer_name})")
+        ax.axhline(0, color="gray", linestyle="--", linewidth=1)
+        # ax.legend([bp0["boxes"][0], bp1["boxes"][0]], ["y=0", "y=1"], loc="upper right")
+
+        ax=axs[2]
+        # Split into positive and negative classes per dataset
+        cosine_sim_0 = np.concatenate([cos[y_data[i] == 0] for i, cos in enumerate(correlations)]) #(cosine_sims_all)]
+        cosine_sim_1 = np.concatenate([cos[y_data[i] == 1] for i, cos in enumerate(correlations)]) #(cosine_sims_all)]
+        print(cosine_sim_0.shape, cosine_sim_1.shape)
+        data = [cosine_sim_0, cosine_sim_1]
+        # Boxplot positioning
+        bp = ax.boxplot(
+            [cosine_sim_0, cosine_sim_1],      # two groups in one call
+            positions=[0, 1],
+            widths=0.5,
+            patch_artist=True,
+            boxprops=dict(linewidth=1.0),
+            medianprops=dict(color="black", linewidth=1.0),
+            whiskerprops=dict(linewidth=1),
+            capprops=dict(linewidth=1),
+        )
+
+        # Colors
+        bp['boxes'][0].set_facecolor("#27AE60")  # green for class 0
+        bp['boxes'][1].set_facecolor("#EB5757")  # red for class 1
+        for b in bp['boxes']:
+            b.set_alpha(0.7)
+
+        # X-axis ticks
+        ax.set_xticks([0, 1])
+        ax.set_xticklabels(['Class 0', 'Class 1'], rotation=45, ha="right")
+
+        # Labels & legend
+        ax.set_ylabel(f"Pearson corr with sv ({t})")
+        ax.set_title(f"Similarity per dataset ({layer_name})")
+        ax.axhline(0, color="gray", linestyle="--", linewidth=1)
+        axs[2].legend([bp0["boxes"][0], bp1["boxes"][0]], ["y=0", "y=1"], loc="upper right")
+
+        plt.tight_layout()
+        plt.show()
+
+        os.makedirs(f"/home/fe/purelku/Desktop/Master_thesis/statistical_analysis_all/{safe_model_name}", exist_ok=True)
+
+        plt.savefig(
+            f"/home/fe/purelku/Desktop/Master_thesis/statistical_analysis_all/{safe_model_name}/boxplot_general_analysis_layer_{titl}.png",
+            dpi=300
+        )
+        plt.close(fig)
+
+##############################################################################################################################################
+
+        fig, axs = plt.subplots(3, 1, figsize=(6, 12), constrained_layout=True)
+        ax=axs[0]
+        z_d_1 = np.concatenate([cos[y_data[i] == 1] for i, cos in enumerate(cosine_sims_all)])
+        z_d_0 = np.concatenate([cos[y_data[i] == 0] for i, cos in enumerate(cosine_sims_all)])
+        
+
+        sns.kdeplot(
+            x=z_d_1.flatten(),
+            fill=True,
+            alpha=0.2,
+            color='red',
+            label=f'y=1',
+            linewidth=1.5,
+            ax=ax
+        )
+        sns.kdeplot(
+            x=z_d_0.flatten(),
+            fill=True,
+            alpha=0.2,
+            color='green',
+            label=f'y=0',
+            linewidth=1.5,
+            ax=ax
+        )
+
+        ax.set_xlabel(f"cosinesim with sv ({t})")
+        ax.set_ylabel("Density")
+        ax.set_title(f"1D density, {layer_name}")
+        
+        ax=axs[1]
+        z_d_1 =np.concatenate([cos[y_data[i] == 1] for i, cos in enumerate(spearman)])
+        z_d_0 =np.concatenate([cos[y_data[i] == 0] for i, cos in enumerate(spearman)])
+
+    
+
+        sns.kdeplot(
+            x=z_d_1.flatten(),
+            fill=True,
+            alpha=0.2,
+            color='red',
+            label=f'y=1',
+            linewidth=1.5,
+            ax=ax
+        )
+        sns.kdeplot(
+            x=z_d_0.flatten(),
+            fill=True,
+            alpha=0.2,
+            color='green',
+            label=f'y=0',
+            linewidth=1.5,
+            ax=ax
+        )
+
+        ax.set_xlabel(f"Spearman corr with sv ({t})")
+        ax.set_ylabel("Density")
+        ax.set_title(f"1D density, {layer_name}")
+
+        ax=axs[2]
+     
+
+        z_d_1 = np.concatenate([cos[y_data[i] == 1] for i, cos in enumerate(correlations)])
+        z_d_0 = np.concatenate([cos[y_data[i] == 0] for i, cos in enumerate(correlations)])
+        sns.kdeplot(
+            x=z_d_1.flatten(),
+            fill=True,
+            alpha=0.2,
+            color='red',
+            label=f'y=1',
+            linewidth=1.5,
+            ax=ax
+        )
+        sns.kdeplot(
+            x=z_d_0.flatten(),
+            fill=True,
+            alpha=0.2,
+            color='green',
+            label=f'y=0',
+            linewidth=1.5,
+            ax=ax
+        )
+
+        ax.set_xlabel(f"Pearson corr with sv ({t})")
+        ax.set_ylabel("Density")
+        ax.set_title(f"1D density, {layer_name}")
+        axs[2].legend(title="Class", fontsize=8)
+        
+        plt.tight_layout()
+        plt.savefig(
+            f"/home/fe/purelku/Desktop/Master_thesis/statistical_analysis_all/{safe_model_name}/density_estimation_datasets_classes_{titl}.png",
+            dpi=300
+        )
+        plt.close(fig)
 
 
 if __name__ == "__main__":

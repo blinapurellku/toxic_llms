@@ -111,17 +111,21 @@ def main(args):
     }
     fil ='cosine' # 'pca' or 'mean_head' or 'diff', 'cosine_diff, cosine
     for a in range(1, models_get[args.model]+1):  # range(0, num_heads+1, 2)  # Ablate from 0 to all heads
+        # if a == 29 or a == 46 and args.model == "Qwen/Qwen2.5-3B-Instruct":
+        #     continue
 
         layer_name = "all_layers"
         # head_id = f"mitigate_top_k_{a}_non"  #
         top_n = a
         mode = 'mitigate'
-        head_id = f'{mode}_top_k_{top_n}_{fil}'#_non'
+        head_id = f'{mode}_top_k_{top_n}_{fil}'#_non' 
+        addin = f't_theta_{0.3}' # f'theta_{0.5}' or 'ablate' # we need the t_ because it is choosing by projecting on the toxic side
 
-        labels_after = np.load(f"{args.output_dir}/mitigate/{safe_model_name}/all_layers_ablation_head_{head_id}_ablate.npy", allow_pickle=True).item()['labels']
+
+        labels_after = np.load(f"{args.output_dir}/mitigate/{safe_model_name}/all_layers_ablation_head_{head_id}_{addin}.npy", allow_pickle=True).item()['labels']
         mode = 'amplify'
-        head_id = f'{mode}_top_k_{top_n}_{fil}_t'
-        labels_after_amplify = np.load(f"{args.output_dir}/amplify/{safe_model_name}/all_layers_ablation_head_{head_id}_ablate.npy", allow_pickle=True).item()['labels']
+        head_id = f'{mode}_top_k_{top_n}_{fil}'
+        labels_after_amplify = np.load(f"{args.output_dir}/amplify/{safe_model_name}/all_layers_ablation_head_{head_id}_{addin}.npy", allow_pickle=True).item()['labels']
         valid_lab_mitigate = [r for r in labels_after if r != -1]
         avg_l = sum(valid_lab_mitigate) / len(labels_after)
         res['mitigate'].append({'top_n': a, 'avg_toxicity': avg_l})
@@ -141,7 +145,7 @@ def main(args):
     plt.figure(figsize=(10, 4))
 
     plt.axhline(y=avg_label, linestyle="--", color="gray", linewidth=1.5,
-            label=rf"ablated h=0")
+            label=rf"{addin} h=0")
     # Plot positives
     for a in list(res.keys()):
         layer_names = [x["top_n"] for x in res[a]]
@@ -149,17 +153,17 @@ def main(args):
         inx = np.argsort(layer_names)
         ordered_l = np.array(layer_names)[inx]
         ordered_av = np.array(avg_toxicities)[inx]
-        plt.plot(ordered_l, ordered_av, label=rf"ablated h={a}")
+        plt.plot(ordered_l, ordered_av, label=rf"{addin} h={a}")
 
 
     
-    plt.xlabel("# Heads ablated")
+    plt.xlabel(f"# Heads {addin}")
     plt.ylabel("Average Toxicity1")
-    plt.title(f"Ablation Results for {safe_model_name}")
+    plt.title(f"Head Editing ({addin}) for {safe_model_name}")
     plt.legend(title=r"ablated h (# heads)", bbox_to_anchor=(1.05, 1.05), ncol=1)
     plt.xticks(ordered_l, rotation=45)
     plt.tight_layout()
-    plt.savefig(f"/home/fe/purelku/Desktop/Master_thesis/results_ablation_plot/{safe_model_name}/{safe_model_name}_ablation_results_{fil}.png", dpi=300, bbox_inches='tight')
+    plt.savefig(f"/home/fe/purelku/Desktop/Master_thesis/results_ablation_plot/{safe_model_name}/{safe_model_name}_{addin}_results_{fil}.png", dpi=300, bbox_inches='tight')
     # plt.savefig(f"/home/fe/purelku/Desktop/Master_thesis/results_steering_plot/{safe_model_name}_steering_results.svg", format='svg')
     plt.close()
 
@@ -238,7 +242,7 @@ def main(args):
 
 
 if __name__ == "__main__":
-    for i, model in enumerate(["allenai/OLMo-2-0425-1B-Instruct", "allenai/OLMo-2-0425-1B","Qwen/Qwen2.5-3B-Instruct","Qwen/Qwen2.5-3B",
+    for i, model in enumerate(["allenai/OLMo-2-0425-1B-Instruct", "allenai/OLMo-2-0425-1B","Qwen/Qwen2.5-3B","Qwen/Qwen2.5-3B-Instruct",
          "google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct", "google/gemma-2-2b", "meta-llama/Llama-3.2-3B"]): #"Qwen/Qwen2.5-3B-Instruct","Qwen/Qwen2.5-3B", 
     # for i, model in enumerate(["Qwen/Qwen2.5-3B-Instruct"]):#, "Qwen/Qwen2.5-3B-Instruct"]):
         args = parse_args()

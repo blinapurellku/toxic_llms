@@ -145,8 +145,8 @@ def parse_args():
     p.add_argument("--output_dir", default="/data/erblina/Master_thesis")
     p.add_argument("--side", choices=["toxic","nontoxic"], default="toxic")
     p.add_argument("--labels_filename", default="labels.npy")
-    p.add_argument("--alpha_min", type=float, default=-2.1)
-    p.add_argument("--alpha_max", type=float, default=2.1)
+    p.add_argument("--alpha_min", type=float, default=-3.5)
+    p.add_argument("--alpha_max", type=float, default=3.5)
     p.add_argument("--summary_filename", default="diff_extrema_summary.json")
     return p.parse_args()
 

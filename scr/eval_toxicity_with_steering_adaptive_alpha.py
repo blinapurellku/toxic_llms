@@ -241,19 +241,25 @@ def main(args):
     prompts_after = {}
     # layer_names = [n for n in layer_names if n in name2mod]
     # layer_names = [args.steer_layer] #list(steering_vector.keys())
-    alpha = 'mahalanobis'
-
+    alpha = 'euclidean'
+    mode = None # or 'last'
     if args.dataset == "walledai/HarmBench":
         layer_names = [args.steer_layer] #list(steering_vector.keys()) 
     else:
         layer_names = [args.steer_layer]
 
+    if mode == 'last':
+        out_dir = f"{args.output_dir}/last"
+    else:
+        out_dir = args.output_dir
+
     print(len(layer_names), "layers to steer")
+    os.makedirs(f"{out_dir}/{safe_model_name}", exist_ok=True)
 
     for layer_name in layer_names: 
-        load_alpha = f"{args.output_dir}/{safe_model_name}/classifier_alphas/alphas_{layer_name}_mahalanobis_{safe_dataset}.npy"
+        load_alpha = f"{args.output_dir}/{safe_model_name}/classifier_alphas/alphas_{layer_name}_{alpha}_{safe_dataset}.npy"
         # layer_names = [args.steer_layer] #list(steering_vector.keys())
-        alphas = np.load(load_alpha, allow_pickle=True).flatten()+0.1 if os.path.exists(load_alpha) else args.alpha if hasattr(args, 'alpha') else 1.0
+        alphas = np.load(load_alpha, allow_pickle=True).flatten() if os.path.exists(load_alpha) else args.alpha if hasattr(args, 'alpha') else 1.0
 
 
         if layer_name not in name2mod:
@@ -264,16 +270,16 @@ def main(args):
         
         
         if args.dataset == "walledai/HarmBench":
-            saved_path = f"{args.output_dir}/{safe_model_name}/{layer_name}__alpha_{alpha}.json.zst" 
+            saved_path = f"{out_dir}/{safe_model_name}/{layer_name}__alpha_{alpha}.json.zst" 
             data = None
 
         else:
-            saved_path = f"{args.output_dir}/{safe_model_name}/{safe_dataset}__{layer_name}__alpha_{alpha}.json.zst"
+            saved_path = f"{out_dir}/{safe_model_name}/{safe_dataset}__{layer_name}__alpha_{alpha}.json.zst"
             data = safe_dataset
             
 
         if os.path.exists(saved_path):
-            filtered_prompts, filtered_responses = load_prompts_responses(args.output_dir, args.model, data, layer_name, alpha)
+            filtered_prompts, filtered_responses = load_prompts_responses(out_dir, args.model, data, layer_name, alpha)
             print(f"Generated {len(filtered_prompts)} valid responses out of {len(filtered_prompts)} prompts.")
             print(f"Generated {len(filtered_responses)} valid responses out of {len(filtered_responses)} total responses.")
             responses_after[layer_name] = filtered_responses
@@ -315,7 +321,7 @@ def main(args):
                 prompts_after[layer_name] = filtered_prompts
 
                 # Save the prompts and responses
-                save_prompts_responses(f'{args.output_dir}', args.model, data, layer_name, alpha, filtered_prompts, filtered_responses)
+                save_prompts_responses(out_dir, args.model, data, layer_name, alpha, filtered_prompts, filtered_responses)
 
             finally:
                 # for h in hooks:
@@ -360,9 +366,9 @@ def main(args):
     cls_model, cls_tokenizer, cls_template, cls_name = load_classifier(args.dataset, device, bnb_config=bnb_config_2)
             
     if args.dataset in "walledai/HarmBench":
-        save_np = f"{args.output_dir}/{safe_model_name}/labels_steering_{side}_alpha_{alpha}_{args.steer_layer}.npy"
+        save_np = f"{out_dir}/{safe_model_name}/labels_steering_{side}_alpha_{alpha}_{args.steer_layer}.npy"
     else:
-        save_np = f"{args.output_dir}/{safe_model_name}/labels_steering_{side}_alpha_{alpha}_{safe_dataset}_{args.steer_layer}.npy"
+        save_np = f"{out_dir}/{safe_model_name}/labels_steering_{side}_alpha_{alpha}_{safe_dataset}_{args.steer_layer}.npy"
 
    
     if os.path.exists(save_np):
