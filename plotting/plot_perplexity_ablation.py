@@ -84,8 +84,16 @@ def main(args):
     safe_model_name = re.sub(r'[\\/*?:"<>|]', "_", args.model)
     save_dir = os.path.join(args.output_dir, safe_model_name)
     # Load JSON
+    theta = args.theta if hasattr(args, 'theta') else 0.0
+    ablate = args.ablate if hasattr(args, 'ablate') else False
+    fil = 'cosine'
+    if ablate:
+        ablate_str = "ablate"
+    else:
+        ablate_str = f"theta_{theta}"
+
     # with open(os.path.join(save_dir, "steered_perplexities.json")) as f:
-    with open(os.path.join(save_dir, "abladed_perplexities_cosine.json")) as f:
+    with open(os.path.join(save_dir, f"ablated_perplexities_{fil}_t_{ablate_str}.json")) as f:
         perplexities = json.load(f)
 
     with open(os.path.join(save_dir, "base_perplexity.json")) as f:
@@ -101,7 +109,7 @@ def main(args):
     # neg_alphas = [a for a in alpha if float(a) < 0]
 
     # Create color maps: Reds for positive, Blues for negative
-    reds = cm.Reds(np.linspace(0.2, 0.9, len(alphas)))   # lighter → darker reds
+    reds = ['red', 'green'] #cm.Reds(np.linspace(0.2, 0.9, len(alphas)))   # lighter → darker reds
 
     # blues = cm.Blues(np.linspace(0.4, 0.9, len(neg_alphas))) # lighter → darker blues
     plt.axhline(y=base_perplexity, linestyle="--", color="gray", linewidth=1.5,
@@ -132,7 +140,7 @@ def main(args):
     plt.legend(title=r"$\alpha$ (steering strength)", bbox_to_anchor=(1.05, 1.05), ncol=2)
     plt.xticks(ordered_l, rotation=45)
     plt.tight_layout()
-    plt.savefig(f"/home/fe/purelku/Desktop/Master_thesis/results_steering_plot/{safe_model_name}_perplexity_results_ablate.png", dpi=300)
+    plt.savefig(f"/home/fe/purelku/Desktop/Master_thesis/results_steering_plot/{safe_model_name}_perplexity_results_{fil}_t_{ablate_str}.png", dpi=300)
     # plt.savefig(f"/home/fe/purelku/Desktop/Master_thesis/results_steering_plot/{safe_model_name}_perplexity_results.svg", format='svg')
     plt.close()
     
@@ -204,10 +212,12 @@ if __name__ == "__main__":
     # for i, model in enumerate(["google/gemma-2-2b"]):#", "meta-llama/Llama-3.2-3B", "google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct"]): #"google/gemma-2-2b-it",
     # for i, model in enumerate(["allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct", "allenai/OLMo-2-0425-1B"]):
     
-    for i, model in enumerate(["google/gemma-2-2b", "meta-llama/Llama-3.2-3B", "allenai/OLMo-2-0425-1B", "Qwen/Qwen2.5-3B"]): #"google/gemma-2-2b-it",
+    for i, model in enumerate(["google/gemma-2-2b", "meta-llama/Llama-3.2-3B", "allenai/OLMo-2-0425-1B", "Qwen/Qwen2.5-3B",
+                               "google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct", "allenai/OLMo-2-0425-1B-Instruct", "Qwen/Qwen2.5-3B-Instruct"]): #"google/gemma-2-2b-it",
         args = parse_args()
         args.model = model
-        
+        args.ablate = False# True
+        args.theta = 0.3
         
         # for a in alpha:
         args.alpha = 1.0
