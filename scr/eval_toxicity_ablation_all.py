@@ -339,7 +339,7 @@ def main(args):
         gc.collect()               
         torch.cuda.empty_cache()
     
-
+cosine_final = {'Qwen/Qwen2.5-3B': (8, 34), 'Qwen/Qwen2.5-3B-Instruct': (46, 46), 'allenai/OLMo-2-0425-1B-Instruct': (25, 24), 'allenai/OLMo-2-0425-1B': (2, 14), 'google/gemma-2-2b-it': (20, 11), 'meta-llama/Llama-3.2-3B-Instruct': (5, 43), 'google/gemma-2-2b': (15, 20), 'meta-llama/Llama-3.2-3B': (9, 62)}
    
 
 if __name__ == "__main__":

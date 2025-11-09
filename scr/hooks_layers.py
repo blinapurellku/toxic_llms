@@ -166,6 +166,8 @@ def main(args):
                 os.path.join(save_path, f"attention_states_sum_pure.safetensors"),
             )
 
+            print('saved for attention states', os.path.join(save_path, f"attention_states_pure.safetensors"))
+
         else:
             save_res = {
                 "logits_before": all_logits,
@@ -232,8 +234,9 @@ if __name__ == "__main__":
     args = parse_args()
     # args.model = "Qwen/Qwen2.5-3B" #"Qwen/Qwen2.5-3B"
     # models = ["allenai/OLMo-2-0425-1B", "google/gemma-2-2b", "meta-llama/Llama-3.2-3B"] #["allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct"] #"allenai/OLMo-2-0425-1B"
-    models = [ "meta-llama/Llama-3.2-3B-Instruct", "Qwen/Qwen2.5-3B-Instruct", "allenai/OLMo-2-0425-1B-Instruct", "google/gemma-2-2b-it"]
-    datasets = ["walledai/AdvBench","walledai/DTStereotype", "walledai/CatHarmfulQA","walledai/DTToxicity", "truthfulqa/truthful_qa"]
+    models = [ #"meta-llama/Llama-3.2-3B-Instruct", "Qwen/Qwen2.5-3B-Instruct", "allenai/OLMo-2-0425-1B-Instruct", 
+              "google/gemma-2-2b-it"]
+    datasets = ["walledai/HarmBench"]#, "walledai/AdvBench","walledai/DTStereotype", "walledai/CatHarmfulQA","walledai/DTToxicity", "truthfulqa/truthful_qa"]
                  # 
     for model in models:
         

@@ -116,7 +116,7 @@ def one_model(args, model):
 
     }
     ablate = args.ablate
-    fil ='cosine' # 'pca' or 'mean_head' or 'diff', 'cosine_diff, cosine
+    fil = args.fil # 'pca' or 'mean_head' or 'diff', 'cosine_diff, cosine
     for a in range(1, models_get[args.model]+1):  # range(0, num_heads+1, 2)  # Ablate from 0 to all heads
         # if a == 29 or a == 46 and args.model == "Qwen/Qwen2.5-3B-Instruct":
         #     continue
@@ -127,7 +127,7 @@ def one_model(args, model):
         mode = 'mitigate'
         head_id = f'{mode}_top_k_{top_n}_{fil}'#_non' 
         if ablate:
-            addin = 'ablate'
+            addin = 't_ablate'
         else:
             addin = f't_theta_{theta}' # f'theta_{0.5}' or 'ablate' # we need the t_ because it is choosing by projecting on the toxic side
 
@@ -144,27 +144,33 @@ def one_model(args, model):
         avg_l_amplify = sum(valid_lab_amplify) / len(labels_after_amplify)
         res['amplify'].append({'top_n': a, 'avg_toxicity': avg_l_amplify})
 
-    res_amp = sorted(res['amplify'], key=lambda x: x['top_n'])
-    res_mit = sorted(res['mitigate'], key=lambda x: x['top_n'])
+    # res_amp = sorted(res['amplify'], key=lambda x: x['top_n'])
+    # res_mit = sorted(res['mitigate'], key=lambda x: x['top_n'])
 
-    amp_vals = np.array([r['avg_toxicity'] for r in res_amp])
-    mit_vals = np.array([r['avg_toxicity'] for r in res_mit])
-    top_n_vals = np.array([r['top_n'] for r in res_amp])  # assuming same top_n set
+    # amp_vals = np.array([r['avg_toxicity'] for r in res_amp])
+    # mit_vals = np.array([r['avg_toxicity'] for r in res_mit])
+    # top_n_vals = np.array([r['top_n'] for r in res_amp])  # assuming same top_n set
 
-    # Compute differences
-    diff = amp_vals - mit_vals
+    # # Compute differences
+    # diff = amp_vals - mit_vals
+    res_amp = sorted(res['amplify'], key=lambda x: x['avg_toxicity'], reverse=True)  # high → low
+    res_mit = sorted(res['mitigate'], key=lambda x: x['avg_toxicity'])               # low → high
+
+    # Pick the greedy best top_n
+    best_amp = res_amp[0] if res_amp else None
+    best_mit = res_mit[0] if res_mit else None
 
     # ✅ Condition: only consider cases where amplify > mitigate
-    mask = diff > 0
-    if np.any(mask):
-        max_idx = np.argmax(diff * mask)  # this works because masked negatives become 0
-        best_top_n = top_n_vals[max_idx]
-        best_diff = diff[max_idx]
-        print(f"Largest positive difference at top_n={best_top_n}: Δtoxicity={best_diff:.4f}")
-    else:
-        print("No top_n where amplify > mitigate.")
+    # mask = diff > 0
+    # if np.any(mask):
+    #     max_idx = np.argmax(diff * mask)  # this works because masked negatives become 0
+    #     best_top_n = top_n_vals[max_idx]
+    #     best_diff = diff[max_idx]
+    #     print(f"Largest positive difference at top_n={best_top_n}: Δtoxicity={best_diff:.4f}")
+    # else:
+    #     print("No top_n where amplify > mitigate.")
     
-    return model, best_top_n
+    return model, best_amp, best_mit
     
 
     # print(f"Head ablation top {a} mitigate - Mean toxicity label: {avg_l}")
@@ -197,10 +203,11 @@ if __name__ == "__main__":
         # "allenai/OLMo-2-0425-1B-SFT","allenai/OLMo-2-0425-1B-DPO","allenai/OLMo-2-0425-1B-Instruct",
         # "allenai/OLMo-2-0425-1B"
         args.ablate = True
-        args.theta = 0.5
+        # args.theta = 0.5
+        args.fil = 'cosine_sign_sv' #'final_sv'
         print(model, args.theta)
         args.model = model
-        mo, best_n = one_model(args, model)
-        res[mo] = best_n.item()
-    print(args.ablate, args.theta)
+        mo, best_amp, best_mit = one_model(args, model)
+        res[mo] = (best_amp['top_n'], best_mit['top_n'])
+    print(args.ablate, args.theta, args.fil)
     print("Final Results:", res)

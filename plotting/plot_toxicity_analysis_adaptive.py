@@ -696,8 +696,8 @@ def main(args):
 
 if __name__ == "__main__":
     args = parse_args()
-    for _, model in enumerate([ "Qwen/Qwen2.5-3B-Instruct", "google/gemma-2-2b",  "allenai/OLMo-2-0425-1B-Instruct","meta-llama/Llama-3.2-3B-Instruct" ,"allenai/OLMo-2-0425-1B","meta-llama/Llama-3.2-3B"]): #"google/gemma-2-2b-it", , "allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO"
-        # "Qwen/Qwen2.5-3B", "google/gemma-2-2b-it"
+    for _, model in enumerate(#[ "Qwen/Qwen2.5-3B-Instruct", "google/gemma-2-2b",  "allenai/OLMo-2-0425-1B-Instruct","meta-llama/Llama-3.2-3B-Instruct" ,"allenai/OLMo-2-0425-1B","meta-llama/Llama-3.2-3B"]): #"google/gemma-2-2b-it", , "allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO"
+                                ["Qwen/Qwen2.5-3B", "google/gemma-2-2b-it"]):
         args.model = model
         args.t = 'mahalanobis' #'euclidean' #linear_regression' 'lda_svd' 'mahalanobis' 'euclidean'
         args.dataset = ["walledai/AdvBench", "walledai/DTStereotype", "walledai/CatHarmfulQA","walledai/DTToxicity","truthfulqa/truthful_qa"]

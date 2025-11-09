@@ -128,7 +128,7 @@ def get_ablation_heads(safe_model_name, output_dir, tox_dir='pca', n=20):
         else: # this is with mean head
             signed_scores = head_diff.mean(dim=-1)
 
-        amp_idx = torch.nonzero(signed_scores > 0, as_tuple=False).squeeze(1)
+        amp_idx = torch.nonzero(signed_scores >= 0, as_tuple=False).squeeze(1)
         mit_idx = torch.nonzero(signed_scores < 0, as_tuple=False).squeeze(1)
 
         amplify = amp_idx[torch.argsort(signed_scores[amp_idx], descending=True)[:5]].tolist()

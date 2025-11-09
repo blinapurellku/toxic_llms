@@ -109,7 +109,7 @@ def main(args):
             "google/gemma-2-2b-it":20,  "google/gemma-2-2b":20, "meta-llama/Llama-3.2-3B-Instruct":67 ,"meta-llama/Llama-3.2-3B":67
 
     }
-    fil ='cosine' # 'pca' or 'mean_head' or 'diff', 'cosine_diff, cosine
+    fil ='final_sv' #cosine_sign_sv' # 'pca' or 'mean_head' or 'diff', 'cosine_diff, cosine
     for a in range(1, models_get[args.model]+1):  # range(0, num_heads+1, 2)  # Ablate from 0 to all heads
         # if a == 29 or a == 46 and args.model == "Qwen/Qwen2.5-3B-Instruct":
         #     continue
@@ -119,8 +119,9 @@ def main(args):
         top_n = a
         mode = 'mitigate'
         head_id = f'{mode}_top_k_{top_n}_{fil}'#_non' 
-        addin = f't_theta_{0.3}' # f'theta_{0.5}' or 'ablate' # we need the t_ because it is choosing by projecting on the toxic side
-
+        addin = f't_theta_{0.5}' #theta_{0.5}' # f'theta_{0.5}' or 'ablate' # we need the t_ because it is choosing by projecting on the toxic side
+        # if a == 51: continue
+        addin = f't_ablate' #theta_{0.5}' # f'theta_{0.5}' or 'ablate' # we need the t_ because it is choosing by projecting on the toxic side
 
         labels_after = np.load(f"{args.output_dir}/mitigate/{safe_model_name}/all_layers_ablation_head_{head_id}_{addin}.npy", allow_pickle=True).item()['labels']
         mode = 'amplify'
