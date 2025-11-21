@@ -113,6 +113,7 @@ def ablation_hook(
         _, _, _, head_dim = tgt.shape
         if ablate:
             tgt[:, :, head, :].zero_()  # (B, L, H)
+        
         else:
             s_mean = s_mean.to(dtype=tgt.dtype, device=tgt.device)
             tgt[:, :, head, :] = s_mean.unsqueeze(1).expand(B, tgt.size(1), head_dim)  # (B, L, H)
@@ -132,7 +133,8 @@ def register_head_ablation(
     spec: Dict[str, Iterable[int]],
     *,
     ablate: bool=True, #str = "zero",                   # "zero" or "fill"
-    fill_layer: Optional[Dict[str, torch.Tensor]] = None,  # layers: (head_dim,) or layers: (num_heads, head_dim)
+    theta: float = 0.5,
+    # fill_layer: Optional[Dict[str, torch.Tensor]] = None,  # layers: (head_dim,) or layers: (num_heads, head_dim)
 ) -> List[torch.utils.hooks.RemovableHandle]:
     """
     Register forward pre-hooks on *named* o_proj modules to ablate specific heads.
@@ -150,21 +152,11 @@ def register_head_ablation(
 
     handles = []
 
-    def make_hook(num_heads: int, heads: Iterable[int], ablate: bool=True, fill: Optional[torch.Tensor]=None):
+    def make_hook(num_heads: int, heads: Iterable[int], ablate: bool=True, theta : float=0.5): #, fill: Optional[torch.Tensor]=None):
         heads = torch.tensor(sorted(set(heads)), dtype=torch.long)
 
-        # if fill is not None:
-        #     if fill.dim() == 1:
-        #         fill_local = fill.view(1, head_dim).expand(heads.numel(), head_dim).contiguous()
-        #     elif fill.dim() == 2:
-        #         assert fill.size(0) == heads.numel() and fill.size(1) == head_dim, \
-        #             f"fill_vec must be (head_dim,) or ({heads.numel()}, {head_dim})."
-        #         fill_local = fill.contiguous()
-        #     else:
-        #         raise ValueError("fill_vec must be 1D or 2D.")
-        # else:
-        #     fill_local = None
-        fill_norm = fill.detach() if isinstance(fill, torch.Tensor) else None
+        
+        # fill_norm = fill.detach() if isinstance(fill, torch.Tensor) else None
 
         def _hook(_m, inp):
             x = inp[0] if isinstance(inp, tuple) else inp  # (B, L, n_heads * head_dim)
@@ -177,18 +169,19 @@ def register_head_ablation(
             if ablate: #mode == "zero":
                 x.index_fill_(dim=2, index=heads.to(x.device), value=0.0)
             else:
-                nonlocal fill_norm
-                if fill_norm is None:
+                x[:, :, heads, :] *= theta 
+                # nonlocal fill_norm
+                # if fill_norm is None:
                 
-                    fill_norm = fill.contiguous()
-                else:
-                    raise ValueError("fill must be 1D or 2D tensor.")
+                #     fill_norm = fill.contiguous()
+                # else:
+                #     raise ValueError("fill must be 1D or 2D tensor.")
                 
-                fill_t = fill.to(dtype=x.dtype, device=x.device) # (H, head_dim)
+                # fill_t = fill.to(dtype=x.dtype, device=x.device) # (H, head_dim)
 
-                for idx, h in enumerate(heads.tolist()):
-                    # fill_local = fill[h].view(1,1,-1).expand(x.size(0), x.size(1), -1) # (B, L, head_dim)
-                    x[:, :, h, :] = fill_t[h].view(1,1,-1).expand(x.size(0), x.size(1), -1) # (B, L, head_dim) fill_local
+                # for idx, h in enumerate(heads.tolist()):
+                #     # fill_local = fill[h].view(1,1,-1).expand(x.size(0), x.size(1), -1) # (B, L, head_dim)
+                #     x[:, :, h, :] = fill_t[h].view(1,1,-1).expand(x.size(0), x.size(1), -1) # (B, L, head_dim) fill_local
             # else:
             #     raise ValueError("mode must be 'zero' or 'fill'.")
 
@@ -208,9 +201,9 @@ def register_head_ablation(
         parent = dict(model.named_modules()).get(parent_name)
         num_heads = model.config.num_attention_heads #getattr(parent, "num_heads")
 
-        fill = fill_layer.get(name) if fill_layer is not None else None
+        # fill = fill_layer.get(name) if fill_layer is not None else None
         
-        hook = make_hook(num_heads, heads, ablate, fill)
+        hook = make_hook(num_heads, heads, ablate, theta)
         handles.append(module.register_forward_pre_hook(hook))
         print(f"✅ Hook registered on {name} for heads {heads}")
 

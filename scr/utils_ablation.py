@@ -99,6 +99,12 @@ def get_ablation_heads(safe_model_name, output_dir, tox_dir='pca', n=20):
             signed_scores = 1 - F.cosine_similarity(toxic_behaviour, overall_mean, dim=-1) #non_toxic_behaviour, dim=-1) #[num_heads]
             signed_scores = signed_scores * sign
 
+        elif tox_dir == 'cosine_max':
+            sign = toxic_behaviour.amax(-1) - non_toxic_behaviour.amax(-1)
+            sign = torch.sign(sign)
+            signed_scores = 1 - F.cosine_similarity(toxic_behaviour, overall_mean, dim=-1) #non_toxic_behaviour, dim=-1) #[num_heads]
+            signed_scores = signed_scores * sign
+
         elif tox_dir == 'cosine_mean':
             sign = - toxic_behaviour.mean(dim=-1) + non_toxic_behaviour.mean(dim=-1)
             sign = torch.sign(sign)
@@ -120,16 +126,77 @@ def get_ablation_heads(safe_model_name, output_dir, tox_dir='pca', n=20):
             signed_scores[pos_mask] =  torch.abs(cos_dist[pos_mask])   # + only if both signs are +
             signed_scores[neg_mask] = -torch.abs(cos_dist[neg_mask]) 
 
-
-        
         else: # this is with mean head
             signed_scores = - head_diff.mean(dim=-1)
 
-        amp_idx = torch.nonzero(signed_scores > 0, as_tuple=False).squeeze(1)
+        amp_idx = torch.nonzero(signed_scores >= 0, as_tuple=False).squeeze(1)
         mit_idx = torch.nonzero(signed_scores < 0, as_tuple=False).squeeze(1)
 
         amplify = amp_idx[torch.argsort(signed_scores[amp_idx], descending=True)[:5]].tolist()
         mitigate = mit_idx[torch.argsort(signed_scores[mit_idx])[:5]].tolist()  # most negative first
+
+        if tox_dir == 'cosine_sv':
+            r = toxic_behaviour - non_toxic_behaviour
+            sims = F.cosine_similarity(atten_tensors[layer_name].float(), r.unsqueeze(0), dim=-1)
+            signed_scores = sims.mean(0)
+            sorted_idx = torch.argsort(signed_scores, descending=True)
+            amplify = sorted_idx[:5].tolist()
+            mitigate = sorted_idx[-5:].tolist()
+        elif tox_dir == 'cosine_mean_sv':
+            r = toxic_behaviour.mean(dim=0) - non_toxic_behaviour.mean(dim=0)
+            sims = F.cosine_similarity(atten_tensors[layer_name].float(), r.unsqueeze(0), dim=-1)
+            signed_scores = sims.mean(0)
+            sorted_idx = torch.argsort(signed_scores, descending=True)
+            amplify = sorted_idx[:5].tolist()
+            mitigate = sorted_idx[-5:].tolist()
+            
+        elif tox_dir == 'cosine_overall_sv':
+            r = toxic_behaviour - non_toxic_behaviour
+            sims = F.cosine_similarity(overall_mean.unsqueeze(0), r.unsqueeze(0), dim=-1)
+            signed_scores = sims.mean(0)
+            sorted_idx = torch.argsort(signed_scores, descending=True)
+            amplify = sorted_idx[:5].tolist()
+            mitigate = sorted_idx[-5:].tolist()
+            
+        elif tox_dir == 'cosine_max_sv':
+            r = toxic_behaviour.amax(dim=0) - non_toxic_behaviour.amax(dim=0)
+            sims = F.cosine_similarity(atten_tensors[layer_name].float(), r.unsqueeze(0), dim=-1)
+            signed_scores = sims.mean(0)
+            sorted_idx = torch.argsort(signed_scores, descending=True)
+            amplify = sorted_idx[:5].tolist()
+            mitigate = sorted_idx[-5:].tolist()
+
+        elif tox_dir == 'final_sv':
+            sign = toxic_behaviour.norm(dim=-1) - non_toxic_behaviour.norm(dim=-1)
+            sign_ = torch.sign(sign)
+            signed_scores_2 = 1 - F.cosine_similarity(toxic_behaviour, non_toxic_behaviour, dim=-1)  # non_toxic_behaviour, dim=-1) #[num_heads]           
+            r = toxic_behaviour.amax(0) - non_toxic_behaviour.amax(0)      # reference direction
+            sims = F.cosine_similarity(atten_tensors[layer_name].float(), r.unsqueeze(0), dim=-1)
+            signed_scores1 = sims.mean(0)
+            sign = torch.sign(signed_scores1)
+            sign2 = (sign == sign_) * sign
+
+            signed_scores = signed_scores_2 * sign2
+            sorted_idx = torch.argsort(signed_scores, descending=True)
+            amplify = sorted_idx[:5].tolist()
+            mitigate = sorted_idx[-5:].tolist()
+        
+        elif tox_dir == 'cosine_sign_sv':
+            
+            signed_scores_2 = 1 - F.cosine_similarity(toxic_behaviour, non_toxic_behaviour, dim=-1)  # non_toxic_behaviour, dim=-1) #[num_heads]           
+            r = toxic_behaviour.amax(0) - non_toxic_behaviour.amax(0)      # reference direction
+            sims = F.cosine_similarity(atten_tensors[layer_name].float(), r.unsqueeze(0), dim=-1)
+            signed_scores1 = sims.mean(0)
+            sign = torch.sign(signed_scores1)
+
+            signed_scores = signed_scores_2 * sign
+            sorted_idx = torch.argsort(signed_scores, descending=True)
+            amplify = sorted_idx[:5].tolist()
+            mitigate = sorted_idx[-5:].tolist()
+
+
+
+
 
         layer_heads[layer_name]['amplify'] = amplify
         layer_heads[layer_name]['mitigate'] = mitigate
@@ -190,3 +257,69 @@ def get_ablation_heads(safe_model_name, output_dir, tox_dir='pca', n=20):
     print("Top mitigate heads:", mitigate_heads)
 
     return all_heads, amplify_heads, mitigate_heads, layer_heads
+
+
+
+def get_editing_heads(safe_model_name, output_dir, tox_dir='pca', n=20):
+    save_path = os.path.join(output_dir, safe_model_name)
+    atten_tensors = load_safetensors(
+            os.path.join(save_path, f"attention_states_pure.safetensors")
+        )
+    
+    labels_before = np.load(f"{output_dir}/{safe_model_name}/labels.npy")
+    all_head_data = []
+    # if tox_dir not in ['pca', 'mean_head', 'diff']:
+    #     tox_dir = 'mean'
+
+
+    for layer_name in list(atten_tensors.keys()):
+
+        overall_mean = atten_tensors[layer_name].float().mean(dim=0)
+        toxic_behaviour = atten_tensors[layer_name][labels_before==1].float().mean(dim=0)  # (num_heads, head_dim)
+        non_toxic_behaviour = atten_tensors[layer_name][labels_before==0].float().mean(dim=0)  # (num_heads, head_dim)
+        head_diff = toxic_behaviour - non_toxic_behaviour  # (num_heads, head_dim)
+        
+        signed_scores = 1 - F.cosine_similarity(toxic_behaviour, non_toxic_behaviour, dim=-1) #[num_heads]
+
+        amp_idx = torch.nonzero(signed_scores >= 0, as_tuple=False).squeeze(1)
+        mit_idx = torch.nonzero(signed_scores < 0, as_tuple=False).squeeze(1)
+
+        
+        
+        head_diff_norms = torch.linalg.norm(head_diff, dim=-1) # (num_heads,)
+
+        for head_id, score in enumerate(signed_scores):
+            all_head_data.append({
+                'layer': layer_name,
+                'head_id': head_id,
+                'score': score.item(),
+                'diff': head_diff_norms.max().item(),
+                })
+
+    all_scores = torch.tensor([d['score'] for d in all_head_data])
+    all_layers = [d['layer'] for d in all_head_data]
+    all_head_ids = [d['head_id'] for d in all_head_data]
+
+    all_diffs = torch.tensor([d['diff'] for d in all_head_data])
+
+    all_diff_s = torch.sort(all_diffs, descending=True)
+
+    top_k_amp_values, top_k_amp_indices = torch.topk(all_scores, k=min(n, len(all_scores)), largest=True)
+
+
+    
+    amplify_heads = {}
+    # Process Amplify Heads
+    for idx in top_k_amp_indices.tolist():
+        layer_name = all_layers[idx]
+        head_id = all_head_ids[idx]
+        if layer_name not in amplify_heads:
+            amplify_heads[layer_name] = []
+       
+        amplify_heads[layer_name].append(head_id)
+
+   
+
+    print("Top amplify heads:", amplify_heads)
+
+    return amplify_heads

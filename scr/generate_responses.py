@@ -1,6 +1,6 @@
 import gc
 import os
-from typing import List, Optional
+from typing import List, Optional, Callable, Sequence
 from collections import defaultdict
 
 import torch
@@ -50,6 +50,8 @@ def generate_responses(
     starting_batch_size: int = 4,
     template: dict | None = None,
     output_dir: str = "./",
+    per_sample_alphas: Optional[Sequence[float]] = None,
+    set_alpha_fn: Optional[Callable[[Sequence[float]], None]] = None,
 ):
     """Generate *responses* for `prompts`, guaranteeing a chat‑template wrap
     (unless `base_model=True`) and auto‑adapt batch size to GPU capacity."""
@@ -63,7 +65,11 @@ def generate_responses(
         gen_kwargs.update(
             {"do_sample": True, "temperature": temperature, "top_p": top_p}
         )
-    
+    # Basic validation for alphas length, if provided
+    if per_sample_alphas is not None and len(per_sample_alphas) != len(prompts):
+        raise ValueError(
+            f"`per_sample_alphas` length {len(per_sample_alphas)} != number of prompts {len(prompts)}"
+        )
     
 
     @find_executable_batch_size(starting_batch_size=starting_batch_size)
@@ -71,6 +77,12 @@ def generate_responses(
         responses = [] 
         for i in tqdm(range(0, len(prompts), bs), desc=f"Generating (bs={bs})", mininterval=10):
             chunk = prompts[i : i + bs]
+
+            # --- NEW: push current batch's alphas (if provided) ---
+            if set_alpha_fn is not None and per_sample_alphas is not None:
+                batch_alphas = per_sample_alphas[i : i + len(chunk)]
+                set_alpha_fn(batch_alphas)
+
             if base_model:
                 wrapped = chunk
             else:
@@ -97,7 +109,9 @@ def generate_responses(
 
                 if not decoded:
                     print(f" Empty generation retrying for: {chunk[j]}")
-
+                    if set_alpha_fn is not None and per_sample_alphas is not None:
+                        set_alpha_fn(batch_alphas[j:j+1])    
+                        
                     with torch.inference_mode():
                         retry_out = model.generate(
                             input_ids=enc.input_ids[j].unsqueeze(0),
