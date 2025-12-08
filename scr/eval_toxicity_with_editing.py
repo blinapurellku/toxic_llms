@@ -331,15 +331,46 @@ def main(args):
     
 # cosine_final = {'Qwen/Qwen2.5-3B': (8, 34), 'Qwen/Qwen2.5-3B-Instruct': (46, 46), 'allenai/OLMo-2-0425-1B-Instruct': (25, 24), 'allenai/OLMo-2-0425-1B': (2, 14), 'google/gemma-2-2b-it': (20, 11), 'meta-llama/Llama-3.2-3B-Instruct': (5, 43), 'google/gemma-2-2b': (15, 20), 'meta-llama/Llama-3.2-3B': (9, 62)}
    
+mean_sv_final = {
+            'Qwen/Qwen2.5-3B': {'a': 15, 'min_lambda': -2.8, 'min_avg_toxicity': np.float64(0.075), 'max_lambda': 2.8, 'max_avg_toxicity': np.float64(0.65)}, 
+            'Qwen/Qwen2.5-3B-Instruct': {'a': 12, 'min_lambda': 0.1, 'min_avg_toxicity': np.float64(0.025), 'max_lambda': -3.0, 'max_avg_toxicity': np.float64(0.22)},
+            'allenai/OLMo-2-0425-1B-Instruct': {'a': 15, 'min_lambda': -3.0, 'min_avg_toxicity': np.float64(0.025), 'max_lambda': -0.9, 'max_avg_toxicity': np.float64(0.23)}, 
+            'allenai/OLMo-2-0425-1B': {'a': 14, 'min_lambda': -3.0, 'min_avg_toxicity': np.float64(0.01), 'max_lambda': 1.1, 'max_avg_toxicity': np.float64(0.415)}, 
+            'google/gemma-2-2b-it': {'a': 14, 'min_lambda': 0.9, 'min_avg_toxicity': np.float64(0.005), 'max_lambda': -1.6, 'max_avg_toxicity': np.float64(0.195)},
+            'meta-llama/Llama-3.2-3B-Instruct': {'a': 8, 'min_lambda': -3.0, 'min_avg_toxicity': np.float64(0.0), 'max_lambda': 2.4, 'max_avg_toxicity': np.float64(0.315)}, 
+            'google/gemma-2-2b': {'a': 14, 'min_lambda': -3.0, 'min_avg_toxicity': np.float64(0.055), 'max_lambda': -0.3, 'max_avg_toxicity': np.float64(0.31)}, 
+            'meta-llama/Llama-3.2-3B': {'a': 11, 'min_lambda': -2.5, 'min_avg_toxicity': np.float64(0.225), 'max_lambda': 2.8, 'max_avg_toxicity': np.float64(0.615)}
+            }
 
+mean_sv_final_20 = {
+                    'Qwen/Qwen2.5-3B': {'a': 17, 'min_lambda': -3.0, 'min_avg_toxicity': np.float64(0.025), 'max_lambda': 2.8, 'max_avg_toxicity': np.float64(0.68)}, 
+                    'Qwen/Qwen2.5-3B-Instruct': {'a': 12, 'min_lambda': 0.1, 'min_avg_toxicity': np.float64(0.025), 'max_lambda': -3.0, 'max_avg_toxicity': np.float64(0.22)}, 
+                    'allenai/OLMo-2-0425-1B-Instruct': {'a': 15, 'min_lambda': -3.0, 'min_avg_toxicity': np.float64(0.025), 'max_lambda': -0.9, 'max_avg_toxicity': np.float64(0.23)}, 
+                    'allenai/OLMo-2-0425-1B': {'a': 14, 'min_lambda': -3.0, 'min_avg_toxicity': np.float64(0.01), 'max_lambda': 1.1, 'max_avg_toxicity': np.float64(0.415)}, 
+                    'google/gemma-2-2b-it': {'a': 14, 'min_lambda': 0.9, 'min_avg_toxicity': np.float64(0.005), 'max_lambda': -1.6, 'max_avg_toxicity': np.float64(0.195)}, 
+                    'meta-llama/Llama-3.2-3B-Instruct': {'a': 8, 'min_lambda': -3.0, 'min_avg_toxicity': np.float64(0.0), 'max_lambda': 2.4, 'max_avg_toxicity': np.float64(0.315)}, 
+                    'google/gemma-2-2b': {'a': 14, 'min_lambda': -3.0, 'min_avg_toxicity': np.float64(0.055), 'max_lambda': -0.3, 'max_avg_toxicity': np.float64(0.31)}, 
+                    'meta-llama/Llama-3.2-3B': {'a': 19, 'min_lambda': -3.0, 'min_avg_toxicity': np.float64(0.105), 'max_lambda': 2.8, 'max_avg_toxicity': np.float64(0.55)}
+                    }
+
+distance_final = {'Qwen/Qwen2.5-3B': {'a': 15, 'min_lambda': -3.0, 'min_avg_toxicity': np.float64(0.265), 'max_lambda': 2.8, 'max_avg_toxicity': np.float64(0.665)}, 'Qwen/Qwen2.5-3B-Instruct': {'a': 15, 'min_lambda': -3.0, 'min_avg_toxicity': np.float64(0.0), 'max_lambda': 1.5, 'max_avg_toxicity': np.float64(0.075)}, 'allenai/OLMo-2-0425-1B-Instruct': {'a': 15, 'min_lambda': -1.3, 'min_avg_toxicity': np.float64(0.01), 'max_lambda': 0.4, 'max_avg_toxicity': np.float64(0.13)}, 'allenai/OLMo-2-0425-1B': {'a': 14, 'min_lambda': -2.5, 'min_avg_toxicity': np.float64(0.03), 'max_lambda': 0.9, 'max_avg_toxicity': np.float64(0.385)}, 'google/gemma-2-2b-it': {'a': 13, 'min_lambda': -3.0, 'min_avg_toxicity': np.float64(0.0), 'max_lambda': -0.5, 'max_avg_toxicity': np.float64(0.05)}, 'meta-llama/Llama-3.2-3B-Instruct': {'a': 13, 'min_lambda': -3.0, 'min_avg_toxicity': np.float64(0.07), 'max_lambda': 2.5, 'max_avg_toxicity': np.float64(0.16)}, 'google/gemma-2-2b': {'a': 14, 'min_lambda': -3.0, 'min_avg_toxicity': np.float64(0.005), 'max_lambda': 3.0, 'max_avg_toxicity': np.float64(0.31)}, 'meta-llama/Llama-3.2-3B': {'a': 15, 'min_lambda': -3.0, 'min_avg_toxicity': np.float64(0.155), 'max_lambda': 3.0, 'max_avg_toxicity': np.float64(0.58)}}
 if __name__ == "__main__":
     
     # for _, model in enumerate(["google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct"]): #"google/gemma-2-2b-it",
     args = parse_args()
     top_all = range(2, 26, 1)
-
-    for t in top_all:
-        args.top_n = t
-        
+    for top_n in top_all:
+        args.top_n = top_n
         main(args)
+    # top_all = mean_sv_final[args.model]['a']
+    # lambda_min = mean_sv_final[args.model]['min_lambda']
+    # lambda_max = mean_sv_final[args.model]['max_lambda']
+    # args.top_n = top_all
+    # for alpha in [lambda_min, lambda_max]:
+    #     args.alpha = alpha
+    #     print(f"Running for top_n: {top_all}, alpha: {alpha}")
+    #     main(args)
+
+
+   
     

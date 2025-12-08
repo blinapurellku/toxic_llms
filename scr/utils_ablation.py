@@ -284,6 +284,32 @@ def get_editing_heads(safe_model_name, output_dir, tox_dir='pca', n=20):
         amp_idx = torch.nonzero(signed_scores >= 0, as_tuple=False).squeeze(1)
         mit_idx = torch.nonzero(signed_scores < 0, as_tuple=False).squeeze(1)
 
+        if tox_dir == 'max_sv':
+            r = toxic_behaviour.amax(dim=0) - non_toxic_behaviour.amax(dim=0)
+            sims = F.cosine_similarity(atten_tensors[layer_name].float(), r.unsqueeze(0), dim=-1)
+            signed_scores = sims.mean(0)
+
+        if tox_dir == 'mean_sv':
+            r = toxic_behaviour.mean(dim=0) - non_toxic_behaviour.mean(dim=0)
+            sims = F.cosine_similarity(atten_tensors[layer_name].float(), r.unsqueeze(0), dim=-1)
+            signed_scores = sims.mean(0)
+
+        if tox_dir == 'max_diff_sv':
+            f = toxic_behaviour - non_toxic_behaviour
+            r = f.amax(dim=0)
+            sims = F.cosine_similarity(atten_tensors[layer_name].float(), r.unsqueeze(0), dim=-1)
+            signed_scores = sims.mean(0)
+
+        if tox_dir == 'maxmin_sv':
+            r = toxic_behaviour.amax(dim=0) - non_toxic_behaviour.amin(dim=0)
+            sims = F.cosine_similarity(atten_tensors[layer_name].float(), r.unsqueeze(0), dim=-1)
+            signed_scores = sims.mean(0)
+
+        if tox_dir == 'mean_sv_min':
+            r = toxic_behaviour.mean(dim=0) - non_toxic_behaviour.mean(dim=0)
+            sims = F.cosine_similarity(atten_tensors[layer_name].float(), r.unsqueeze(0), dim=-1)
+            signed_scores = sims.mean(0)
+
         
         
         head_diff_norms = torch.linalg.norm(head_diff, dim=-1) # (num_heads,)
@@ -306,6 +332,8 @@ def get_editing_heads(safe_model_name, output_dir, tox_dir='pca', n=20):
 
     top_k_amp_values, top_k_amp_indices = torch.topk(all_scores, k=min(n, len(all_scores)), largest=True)
 
+    top_k_mit_values, top_k_mit_indices = torch.topk(all_scores, k=min(n, len(all_scores)), largest=False)
+
 
     
     amplify_heads = {}
@@ -317,6 +345,14 @@ def get_editing_heads(safe_model_name, output_dir, tox_dir='pca', n=20):
             amplify_heads[layer_name] = []
        
         amplify_heads[layer_name].append(head_id)
+        
+    if tox_dir == 'mean_sv_min':
+        amplify_heads = {}
+        for idx in top_k_mit_indices.tolist():
+            layer_name = all_layers[idx]
+            head_id = all_head_ids[idx]
+            if layer_name not in amplify_heads:
+                amplify_heads[layer_name] = []    
 
    
 
