@@ -36,6 +36,10 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 import numpy as np
 import matplotlib.pyplot as plt
 from textwrap import wrap
+import os, re
+import numpy as np
+from textwrap import wrap
+import matplotlib.pyplot as plt
 
 def plot_steering_results(
     layers,
@@ -51,7 +55,7 @@ def plot_steering_results(
     ylim=(0, 1.0),
     dpi=300,
     savepath=None,
-    t=1
+    fil = None, 
 ):
     """
     Plot grouped bar charts for multiple layers showing three steering settings
@@ -85,9 +89,9 @@ def plot_steering_results(
         "pos" : "red",  # red
     }
     legend_labels = {
-        "base": r"$\alpha = 0$ ",
-        "neg": r"$\alpha \downarrow$",
-        "pos": r"$\alpha \uparrow$",
+        "base": r"$\lambda = 1$ (Base)",
+        "neg" : r"$\lambda_\downarrow$",
+        "pos" : r"$\lambda_\uparrow$",
     }
 
     # Figure
@@ -136,7 +140,6 @@ def plot_steering_results(
     def _short_name(name):
         return re.split(r'[\\/]', name)[-1]
     
-    
     # plotting
     for ax, layer in zip(axes, layers):
         # Determine alpha keys for this layer from HarmBench dict
@@ -163,8 +166,6 @@ def plot_steering_results(
             vals["neg"].append(ddict[neg_key])
             vals["pos"].append(ddict[pos_key])
 
-
-        
         # Draw bars
         for j, cond in enumerate(conditions):
             xs = x_group_centers + offsets[cond]
@@ -183,12 +184,13 @@ def plot_steering_results(
                         ha="center", va="bottom", fontsize=6, rotation=0
                     )
 
-        # Style & titles
+       
         ax.set_ylim(*ylim)
         ax.set_xticks(x_group_centers)
         # wrap labels a bit in case they’re long
         group_labels = ['HarmBench', 'AdvBench', 'DTStereotype', 'CATHarmfulQA', 'DTToxicity' ,'TruthfulQA']
 
+        # wrap labels a bit in case they’re long
         ax.set_xticklabels(group_labels, rotation=90, fontsize=12)
         ax.grid(axis="y", linestyle="--", alpha=0.35, linewidth=0.7)
         ax.spines["top"].set_visible(False)
@@ -199,19 +201,18 @@ def plot_steering_results(
 
         # Per-layer title shows the actual alpha values used
         ax.set_title(
-            f"Layer {layer.split('.')[-1]}",
+            fr"$\# H = ${layer.split('_')[-1]}",
             fontsize=12
         )
 
     axes[0].set_ylabel("UOR", fontsize=12)
-    axes[1].set_ylabel("UOR", fontsize=12)
+    # axes[1].set_ylabel("UOR", fontsize=12)
 
-    
     # Shared super-title
-    # fig.suptitle(
-    #     f"Steering Toxicity Analysis for {safe_model_name.replace('_','-')}",
-    #     fontsize=14, y=1.02
-    # )
+    fig.suptitle(
+        f"{safe_model_name.replace('_','-')}",
+        fontsize=14, y=1.02
+    )
 
     # One legend for all
     handles, labels = axes[0].get_legend_handles_labels()
@@ -222,9 +223,9 @@ def plot_steering_results(
     # Save then show
     if savepath is None:
         # if os.path.exists(f"/home/fe/purelku/Desktop/Master_thesis/results_steering_datasets/{safe_model_name}"):
-        os.makedirs(f"/home/fe/purelku/Desktop/Master_thesis/results_steering_datasets/{safe_model_name}", exist_ok=True)
+        os.makedirs(f"/home/fe/purelku/Desktop/Master_thesis/results_ablation_plot/{safe_model_name}", exist_ok=True)
 
-        savepath = f"/home/fe/purelku/Desktop/Master_thesis/results_steering_datasets/{safe_model_name}/steering_toxicity_{safe_model_name}_datasets_{t}"
+        savepath = f"/home/fe/purelku/Desktop/Master_thesis/results_ablation_plot/{safe_model_name}/steering_toxicity_{safe_model_name}_datasets_{fil}"
         
     fig.savefig(f"{savepath}.png", dpi=dpi, bbox_inches="tight")
     fig.savefig(f"{savepath}.svg", format="svg", bbox_inches="tight", dpi=dpi)
@@ -232,10 +233,7 @@ def plot_steering_results(
     plt.show()
     plt.close(fig)
 
-import os, re
-import numpy as np
-from textwrap import wrap
-import matplotlib.pyplot as plt
+
 
 def plot_steering_deltas(
     layers,
@@ -251,7 +249,7 @@ def plot_steering_deltas(
     ylim=None,                 # if None, auto-symmetric around 0
     dpi=300,
     savepath=None,
-    t=1
+    fil = None,
 ):
     """
     Plot grouped *delta* bars for multiple layers.
@@ -274,15 +272,15 @@ def plot_steering_deltas(
         "pos": "red",  # red
     }
     legend_labels = {
-        "base": r"$\alpha = 0$ ",
-        "neg": r"$\alpha \downarrow$",
-        "pos": r"$\alpha \uparrow$",
+        "base": r"$\lambda = 1$ ",
+        "neg": r"$\lambda \downarrow$",
+        "pos": r"$\lambda \uparrow$",
     }
 
     # Figure
     fig, axes = plt.subplots(
         1, n_layers, figsize=(min(5 * n_layers, 20), 5.0),
-         constrained_layout=True
+        sharey=True, constrained_layout=True
     )
     if n_layers == 1:
         axes = [axes]
@@ -322,7 +320,6 @@ def plot_steering_deltas(
     def _short_name(name):
         return re.split(r'[\\/]', name)[-1]
 
-    
     # Gather all deltas to auto-scale y if requested
     all_deltas = []
 
@@ -334,10 +331,8 @@ def plot_steering_deltas(
         base_key, neg_key, pos_key, base_str, neg_str, pos_str = _alpha_keys(res_harmbench[layer])
 
         group_labels = [_short_name(ds1_name)] + [_short_name(ds) for ds in ds2_names]
-
         deltas = {"neg": [], "pos": []}
 
-        
         # HarmBench deltas
         hb = res_harmbench[layer]
         base = hb[base_key if base_key in hb else 0.0]
@@ -370,11 +365,7 @@ def plot_steering_deltas(
             yabs = max(abs(np.nanmin(all_deltas)), abs(np.nanmax(all_deltas)))
         pad = max(0.02, 0.08 * yabs)
         ylim = (-yabs - pad, yabs + pad)
-    
-    # legend_labels = {
-    #     "neg": r"$\alpha_{UOR \downarrow}$ vs base",
-    #     "pos": r"$\alpha_{UOR \uparrow}$ vs base",
-    #     }
+
     # Plot
     for ax, layer in zip(axes, layers):
         group_labels, deltas = per_layer_data[layer]
@@ -403,9 +394,9 @@ def plot_steering_deltas(
                     )
 
         # zero line = base reference
-        ax.axhline(0.0, color="grey", linestyle="--", linewidth=1.2, alpha=0.9, label=r"$\alpha = 0$")
-
+        ax.axhline(0.0, color="grey", linestyle="--", linewidth=1.2, alpha=0.9)
         group_labels = ['HarmBench', 'AdvBench', 'DTStereotype', 'CATHarmfulQA', 'DTToxicity' ,'TruthfulQA']
+
         # style
         ax.set_ylim(*ylim)
         ax.set_xticks(x_group_centers)
@@ -421,21 +412,17 @@ def plot_steering_deltas(
         ax.tick_params(axis="x", length=0)
 
         ax.set_title(
-            f"Layer {layer.split('.')[-1]}",
+            fr" $\# H = ${layer.split('_')[-1]}",
             fontsize=12
         )
-        # ax.set_title(
-        #     f"Layer {layer}\n($\\alpha_{{neg}}={neg_str}$, $\\alpha_{{pos}}={pos_str}$)",
-        #     fontsize=12
-        # )
 
     axes[0].set_ylabel("Δ UOR", fontsize=12)
-    axes[1].set_ylabel("Δ UOR", fontsize=12)
+    # axes[1].set_ylabel("Δ UOR", fontsize=12)
 
-    # fig.suptitle(
-    #     f"Toxicity Shift vs Base for {safe_model_name.replace('_','-')}",
-    #     fontsize=14, y=1.02
-    # )
+    fig.suptitle(
+        f"{safe_model_name.replace('_','-')}",
+        fontsize=14, y=1.02
+    )
 
     handles, labels = axes[0].get_legend_handles_labels()
     if handles:
@@ -444,9 +431,9 @@ def plot_steering_deltas(
 
     # Save
     if savepath is None:
-        os.makedirs(f"/home/fe/purelku/Desktop/Master_thesis/results_steering_datasets/{safe_model_name}", exist_ok=True)
-        savepath = f"/home/fe/purelku/Desktop/Master_thesis/results_steering_datasets/{safe_model_name}/steering_toxicity_deltas_{safe_model_name}_datasets_{t}"
-    print(f"Saving to {savepath}.png/.svg")
+        os.makedirs(f"/home/fe/purelku/Desktop/Master_thesis/results_ablation_plot/{safe_model_name}", exist_ok=True)
+        savepath = f"/home/fe/purelku/Desktop/Master_thesis/results_ablation_plot/{safe_model_name}/steering_toxicity_deltas_{safe_model_name}_datasets_{fil}"
+
     fig.savefig(f"{savepath}.png", dpi=dpi, bbox_inches="tight")
     fig.savefig(f"{savepath}.svg", format="svg", bbox_inches="tight", dpi=dpi)
 
@@ -494,55 +481,42 @@ def parse_args():
     return p.parse_args()
 
 
+cosine_None =  {'Qwen/Qwen2.5-3B': (10, 15), 'Qwen/Qwen2.5-3B-Instruct': (40, 51), 'allenai/OLMo-2-0425-1B-Instruct': (25, 25), 'allenai/OLMo-2-0425-1B': (1, 22), 'google/gemma-2-2b-it': (20, 11), 'meta-llama/Llama-3.2-3B-Instruct': (1, 33), 'google/gemma-2-2b': (15, 20), 'meta-llama/Llama-3.2-3B': (2, 56)}
+
+final_sv_None = {'Qwen/Qwen2.5-3B': (45, 36), 'Qwen/Qwen2.5-3B-Instruct': (56, 52), 'allenai/OLMo-2-0425-1B-Instruct': (25, 25), 'allenai/OLMo-2-0425-1B': (3, 23), 'google/gemma-2-2b-it': (20, 4), 'meta-llama/Llama-3.2-3B-Instruct': (52, 66), 'google/gemma-2-2b': (14, 10), 'meta-llama/Llama-3.2-3B': (5, 62)}
+
+cosine_max_sv_None = {'Qwen/Qwen2.5-3B': (3, 54), 'Qwen/Qwen2.5-3B-Instruct': (50, 4), 'allenai/OLMo-2-0425-1B-Instruct': (24, 3), 'allenai/OLMo-2-0425-1B': (4, 22), 'google/gemma-2-2b-it': (20, 9), 'meta-llama/Llama-3.2-3B-Instruct': (67, 40), 'google/gemma-2-2b': (18, 6), 'meta-llama/Llama-3.2-3B': (14, 57)}
+
+cosine_mean_sv_None = {'Qwen/Qwen2.5-3B': (7, 56), 'Qwen/Qwen2.5-3B-Instruct': (52, 27), 'allenai/OLMo-2-0425-1B-Instruct': (21, 3), 'allenai/OLMo-2-0425-1B': (3, 19), 'google/gemma-2-2b-it': (14, 5), 'meta-llama/Llama-3.2-3B-Instruct': (59, 41), 'google/gemma-2-2b': (16, 11), 'meta-llama/Llama-3.2-3B': (3, 67)}
+
+cosine_max_None = {'Qwen/Qwen2.5-3B': (6, 47), 'Qwen/Qwen2.5-3B-Instruct': (51, 7), 'allenai/OLMo-2-0425-1B-Instruct': (24, 24), 'allenai/OLMo-2-0425-1B': (2, 24), 'google/gemma-2-2b-it': (17, 1), 'meta-llama/Llama-3.2-3B-Instruct': (11, 22), 'google/gemma-2-2b': (3, 11), 'meta-llama/Llama-3.2-3B': (9, 65)}
+
+cosine_sv_None = {'Qwen/Qwen2.5-3B': (25, 57), 'Qwen/Qwen2.5-3B-Instruct': (39, 17), 'allenai/OLMo-2-0425-1B-Instruct': (2, 20), 'allenai/OLMo-2-0425-1B': (3, 21), 'google/gemma-2-2b-it': (17, 3), 'meta-llama/Llama-3.2-3B-Instruct': (63, 64), 'google/gemma-2-2b': (20, 12), 'meta-llama/Llama-3.2-3B': (7, 66)}
+
+cosine_sign_sv_None = {'Qwen/Qwen2.5-3B': (7, 50), 'Qwen/Qwen2.5-3B-Instruct': (48, 32), 'allenai/OLMo-2-0425-1B-Instruct': (22, 25), 'allenai/OLMo-2-0425-1B': (7, 25), 'google/gemma-2-2b-it': (17, 4), 'meta-llama/Llama-3.2-3B-Instruct': (58, 15), 'google/gemma-2-2b': (1, 10), 'meta-llama/Llama-3.2-3B': (1, 64)}
+
+
 def main(args):
-    
-    
-
-    # model_steering_1 = {'Qwen/Qwen2.5-3B': {'layers': [ 'model.layers.19', 'model.layers.20', 'model.layers.22'], 'alphas_up': [ 1.6, 1.6, 1.6], 'alphas_down': [ -1.8, -2.0, -2.0], 'max_avg_tox': [0.87, 0.87, 0.795, 0.76], 'min_avg_tox': [0.21, 0.21, 0.22, 0.19]},
-    #     'Qwen/Qwen2.5-3B-Instruct': {'layers': [ 'model.layers.21', 'model.layers.20', 'model.layers.22'], 'alphas_up': [ 2.0, 2.0, 2.0], 'alphas_down': [ -0.6, -0.6, -0.6], 'max_avg_tox': [0.79, 0.79, 0.785, 0.78], 'min_avg_tox': [0.0, 0.0, 0.0, 0.0]},
-    #     'allenai/OLMo-2-0425-1B-Instruct': {'layers': [ 'model.layers.9', 'model.layers.7', 'model.layers.8'], 'alphas_up': [ 2.0, 1.8, 1.6], 'alphas_down': [ -0.8, -1.0, -0.8], 'max_avg_tox': [0.75, 0.75, 0.735, 0.715], 'min_avg_tox': [0.0, 0.0, 0.0, 0.0]},
-    #     'allenai/OLMo-2-0425-1B': {'layers': ['model.layers.5', 'model.layers.7', 'model.layers.4'], 'alphas_up': [-0.15, -0.07, 0.05], 'alphas_down': [-2.0, -1.5, -2.0], 'max_avg_tox': [0.4, 0.39, 0.39], 'min_avg_tox': [0.09, 0.085, 0.09]},
-    #     'google/gemma-2-2b-it': {'layers': [ 'model.layers.10', 'model.layers.11', 'model.layers.12'], 'alphas_up': [ 1.5, 1.1, 1.0], 'alphas_down': [-0.3, -0.25, -0.2], 'max_avg_tox': [0.63, 0.63, 0.615, 0.595], 'min_avg_tox': [0.0, 0.0, 0.0, 0.0]},
-    #     'meta-llama/Llama-3.2-3B-Instruct': {'layers': [ 'model.layers.12', 'model.layers.13', 'model.layers.14'], 'alphas_up': [  2.0, 1.6, 2.0], 'alphas_down': [ -0.8, -0.5, -0.5], 'max_avg_tox': [0.82, 0.82, 0.81, 0.79], 'min_avg_tox': [0.0, 0.0, 0.0, 0.0]},
-    #     'google/gemma-2-2b': {'layers': [ 'model.layers.6', 'model.layers.7', 'model.layers.13'], 'alphas_up': [ 1.2, 1.3, 1.4], 'alphas_down': [ -2.0, -1.8, -1.8], 'max_avg_tox': [0.36, 0.36, 0.35, 0.36], 'min_avg_tox': [0.135, 0.02, 0.035, 0.065]},
-    #     'meta-llama/Llama-3.2-3B': {'layers': [ 'model.layers.12', 'model.layers.10', 'model.layers.11'], 'alphas_up': [ 0.7, 1.0, 1.0], 'alphas_down': [ -2.0, -1.4, -1.6], 'max_avg_tox': [0.605, 0.57, 0.575, 0.6], 'min_avg_tox': [0.385, 0.3, 0.33, 0.36]},
-    #         }
+    # args = parse_args()
 
     
-    
-    
-    model_steering_final = {'Qwen/Qwen2.5-3B': {'layers': [ 'model.layers.19', 'model.layers.20'], 'alphas_up': [ 1.6, 1.6], 'alphas_down': [ -1.8, -2.0], 'max_avg_tox': [0.87, 0.87, 0.795, 0.76], 'min_avg_tox': [0.21, 0.21, 0.22, 0.19]},
-        'Qwen/Qwen2.5-3B-Instruct': {'layers': [ 'model.layers.21', 'model.layers.22'], 'alphas_up': [ 2.0, 2.0], 'alphas_down': [ -0.6, -0.6], 'max_avg_tox': [0.79, 0.79, 0.785, 0.78], 'min_avg_tox': [0.0, 0.0, 0.0, 0.0]},
-        'allenai/OLMo-2-0425-1B-Instruct': {'layers': [ 'model.layers.9', 'model.layers.7', 'model.layers.8'], 'alphas_up': [ 2.0, 1.8, 1.6], 'alphas_down': [ -0.8, -1.0, -0.8], 'max_avg_tox': [0.75, 0.75, 0.735, 0.715], 'min_avg_tox': [0.0, 0.0, 0.0, 0.0]},
-        'allenai/OLMo-2-0425-1B': {'layers': ['model.layers.5', 'model.layers.7', 'model.layers.4'], 'alphas_up': [-0.15, -0.07, 0.05], 'alphas_down': [-2.0, -1.5, -2.0], 'max_avg_tox': [0.4, 0.39, 0.39], 'min_avg_tox': [0.09, 0.085, 0.09]},
-        'google/gemma-2-2b-it': {'layers': [ 'model.layers.10', 'model.layers.12'], 'alphas_up': [ 1.5, 1.0], 'alphas_down': [-0.3, -0.2], 'max_avg_tox': [0.63, 0.63, 0.615, 0.595], 'min_avg_tox': [0.0, 0.0, 0.0, 0.0]},
-        'meta-llama/Llama-3.2-3B-Instruct': {'layers': [ 'model.layers.12', 'model.layers.13'], 'alphas_up': [  2.0, 1.6], 'alphas_down': [ -0.8, -0.5], 'max_avg_tox': [0.82, 0.82, 0.81, 0.79], 'min_avg_tox': [0.0, 0.0, 0.0, 0.0]},
-        'google/gemma-2-2b': {'layers': [ 'model.layers.6', 'model.layers.7'], 'alphas_up': [ 1.2, 1.3], 'alphas_down': [ -2.0, -1.8], 'max_avg_tox': [0.36, 0.36, 0.35, 0.36], 'min_avg_tox': [0.135, 0.02, 0.035, 0.065]},
-        'meta-llama/Llama-3.2-3B': {'layers': ['model.layers.10', 'model.layers.11'], 'alphas_up': [ 1.0, 1.0], 'alphas_down': [  -1.4, -1.6], 'max_avg_tox': [0.605, 0.57, 0.575, 0.6], 'min_avg_tox': [0.385, 0.3, 0.33, 0.36]},
+    ablation_theta_0_5 = {'Qwen/Qwen2.5-3B': 3, 'Qwen/Qwen2.5-3B-Instruct': 46, 'allenai/OLMo-2-0425-1B-Instruct': 23, 'allenai/OLMo-2-0425-1B': 15, 'google/gemma-2-2b-it': 20, 'meta-llama/Llama-3.2-3B-Instruct': 33, 'google/gemma-2-2b': 20, 'meta-llama/Llama-3.2-3B': 13}
+
+    ablation_theta_None = {'Qwen/Qwen2.5-3B': 19, 'Qwen/Qwen2.5-3B-Instruct': 46, 'allenai/OLMo-2-0425-1B-Instruct': 25, 'allenai/OLMo-2-0425-1B': 13, 'google/gemma-2-2b-it': 20, 'meta-llama/Llama-3.2-3B-Instruct': 2, 'google/gemma-2-2b': 20, 'meta-llama/Llama-3.2-3B': 42}
+
+    ablation_theta_0_3 = {'Qwen/Qwen2.5-3B': 14, 'Qwen/Qwen2.5-3B-Instruct': 43, 'allenai/OLMo-2-0425-1B-Instruct': 24, 'allenai/OLMo-2-0425-1B': 7, 'google/gemma-2-2b-it': 20, 'meta-llama/Llama-3.2-3B-Instruct': 28, 'google/gemma-2-2b': 17, 'meta-llama/Llama-3.2-3B': 27}
+     
+    mean_sv_final = {
+            'Qwen/Qwen2.5-3B': {'a': 15, 'min_lambda': -2.8, 'min_avg_toxicity': np.float64(0.075), 'max_lambda': 2.8, 'max_avg_toxicity': np.float64(0.65)}, 
+            'Qwen/Qwen2.5-3B-Instruct': {'a': 12, 'min_lambda': 0.1, 'min_avg_toxicity': np.float64(0.025), 'max_lambda': -3.0, 'max_avg_toxicity': np.float64(0.22)},
+            'allenai/OLMo-2-0425-1B-Instruct': {'a': 15, 'min_lambda': -3.0, 'min_avg_toxicity': np.float64(0.025), 'max_lambda': -0.9, 'max_avg_toxicity': np.float64(0.23)}, 
+            'allenai/OLMo-2-0425-1B': {'a': 14, 'min_lambda': -3.0, 'min_avg_toxicity': np.float64(0.01), 'max_lambda': 1.1, 'max_avg_toxicity': np.float64(0.415)}, 
+            'google/gemma-2-2b-it': {'a': 14, 'min_lambda': 0.9, 'min_avg_toxicity': np.float64(0.005), 'max_lambda': -1.6, 'max_avg_toxicity': np.float64(0.195)},
+            'meta-llama/Llama-3.2-3B-Instruct': {'a': 8, 'min_lambda': -3.0, 'min_avg_toxicity': np.float64(0.0), 'max_lambda': 2.4, 'max_avg_toxicity': np.float64(0.315)}, 
+            'google/gemma-2-2b': {'a': 14, 'min_lambda': -3.0, 'min_avg_toxicity': np.float64(0.055), 'max_lambda': -0.3, 'max_avg_toxicity': np.float64(0.31)}, 
+            'meta-llama/Llama-3.2-3B': {'a': 11, 'min_lambda': -2.5, 'min_avg_toxicity': np.float64(0.225), 'max_lambda': 2.8, 'max_avg_toxicity': np.float64(0.615)}
             }
-   
-    
-    model_steering_last_final = {'Qwen/Qwen2.5-3B': {'layers': ['model.layers.19', 'model.layers.20'], 'alphas_up': [2.2,1.6], 'alphas_down': [-2.5,  -2.0], 'max_avg_tox': [0.82, 0.76, 0.785], 'min_avg_tox': [0.265, 0.265, 0.295]},
-    'Qwen/Qwen2.5-3B-Instruct': {'layers': [ 'model.layers.21', 'model.layers.22'], 'alphas_up': [2.0, 2.0], 'alphas_down': [-0.9, -0.8], 'max_avg_tox': [0.68, 0.645, 0.645], 'min_avg_tox': [0.0, 0.0, 0.0]},
-    'allenai/OLMo-2-0425-1B-Instruct': {'layers': ['model.layers.9', 'model.layers.8', 'model.layers.7'], 'alphas_up': [1.8, 2.0, 2.0], 'alphas_down': [-1.0, -0.9, -1.5], 'max_avg_tox': [0.64, 0.62, 0.565], 'min_avg_tox': [0.0, 0.0, 0.005]},
-    'allenai/OLMo-2-0425-1B': {'layers': ['model.layers.7', 'model.layers.5', 'model.layers.4'], 'alphas_up': [-0.2, -0.4, -0.3], 'alphas_down': [2.0, 1.8, -1.8], 'max_avg_tox': [0.41, 0.415, 0.4], 'min_avg_tox': [0.1, 0.14, 0.155]},
-    'google/gemma-2-2b-it': {'layers': [ 'model.layers.10', 'model.layers.12'], 'alphas_up': [ 2.2, 1.2], 'alphas_down': [-2.2, -1.0], 'max_avg_tox': [0.42, 0.385, 0.26], 'min_avg_tox': [0.0, 0.0, 0.0]},
-    'meta-llama/Llama-3.2-3B-Instruct': {'layers': ['model.layers.12','model.layers.13' ], 'alphas_up': [2.0, 2.0], 'alphas_down': [-0.8, -1.1], 'max_avg_tox': [0.685, 0.65, 0.655], 'min_avg_tox': [0.0, 0.0, 0.005]},
-    'google/gemma-2-2b': {'layers': [ 'model.layers.6', 'model.layers.7'], 'alphas_up': [1.4, 1.4], 'alphas_down': [-1.8, -2.0], 'max_avg_tox': [0.4, 0.3, 0.325], 'min_avg_tox': [0.05, 0.03, 0.07]},
-    'meta-llama/Llama-3.2-3B': {'layers': ['model.layers.10', 'model.layers.11'], 'alphas_up': [1.8, 1.3], 'alphas_down': [-2.0, -1.8], 'max_avg_tox': [0.56, 0.59, 0.575], 'min_avg_tox': [0.335, 0.37, 0.375]}}
-
-    print(args.model)
-    t =  args.t #'final'
-    mode=args.mode #'last'
-    if mode=='all':
-    
-        info = model_steering_final[args.model]
-    elif mode == 'last':
-        info = model_steering_last_final[args.model]
-
-    else: 
-        print("No valid t or mode selected")
-        info = model_steering_final[args.model]
+    distance_final = {'Qwen/Qwen2.5-3B': {'a': 15, 'min_lambda': -3.0, 'min_avg_toxicity': np.float64(0.265), 'max_lambda': 2.8, 'max_avg_toxicity': np.float64(0.665)}, 'Qwen/Qwen2.5-3B-Instruct': {'a': 15, 'min_lambda': -3.0, 'min_avg_toxicity': np.float64(0.0), 'max_lambda': 1.5, 'max_avg_toxicity': np.float64(0.075)}, 'allenai/OLMo-2-0425-1B-Instruct': {'a': 15, 'min_lambda': -1.3, 'min_avg_toxicity': np.float64(0.01), 'max_lambda': 0.4, 'max_avg_toxicity': np.float64(0.13)}, 'allenai/OLMo-2-0425-1B': {'a': 14, 'min_lambda': -2.5, 'min_avg_toxicity': np.float64(0.03), 'max_lambda': 0.9, 'max_avg_toxicity': np.float64(0.385)}, 'google/gemma-2-2b-it': {'a': 13, 'min_lambda': -3.0, 'min_avg_toxicity': np.float64(0.0), 'max_lambda': -0.5, 'max_avg_toxicity': np.float64(0.05)}, 'meta-llama/Llama-3.2-3B-Instruct': {'a': 13, 'min_lambda': -3.0, 'min_avg_toxicity': np.float64(0.07), 'max_lambda': 2.5, 'max_avg_toxicity': np.float64(0.16)}, 'google/gemma-2-2b': {'a': 14, 'min_lambda': -3.0, 'min_avg_toxicity': np.float64(0.005), 'max_lambda': 3.0, 'max_avg_toxicity': np.float64(0.31)}, 'meta-llama/Llama-3.2-3B': {'a': 15, 'min_lambda': -3.0, 'min_avg_toxicity': np.float64(0.155), 'max_lambda': 3.0, 'max_avg_toxicity': np.float64(0.58)}}
 
     dataset = args.dataset #"walledai/AdvBench"
     # safe_dataset = re.sub(r'[\\/*?:"<>|]', "_", dataset)
@@ -550,45 +524,68 @@ def main(args):
 
     safe_model_name = re.sub(r'[\\/*?:"<>|]', "_", args.model)
     
-
+    # all_methods = ['cosine_max', 'cosine_sv', 'cosine_sign_sv', 'final_sv', 'cosine_mean_sv', 'cosine_max_sv', 'cosine']
+    all_methods = [args.t]
     labels_harmbench = np.load(f"{args.output_dir}/{safe_model_name}/labels.npy")
     valid_lab = [r for r in labels_harmbench if r != -1]
     avg_harmbench = sum(valid_lab) / len(labels_harmbench)
 
     side='toxic'
-    layers = info['layers']
-    alphas_n = info['alphas_down']
-    alphas_p = info['alphas_up']
-    print(f"Layers: {layers}")
-    print(f"Positive alphas: {alphas_p}")
-    print(f"Negative alphas: {alphas_n}")
-
+    
+    addin = ''
     res_harmbench = {}
-    if mode == 'last':
-        output_dir = f"{args.output_dir}/last"
-    else:
-        output_dir = args.output_dir
+    layers = []
+    for i, th in enumerate(all_methods):
+        # if a == 29 or a == 46 and args.model == "Qwen/Qwen2.5-3B-Instruct":
+        #     continue
+        fil = th
 
-    for i, layer in enumerate(layers):
-        alpha_neg = alphas_n[i]
-        labels_after_harmbench=np.load(f"{output_dir}/{safe_model_name}/labels_steering_{side}_alpha_{alpha_neg}.npy", allow_pickle=True).item()
-        labels_after_harmbench = labels_after_harmbench[layer]
-        valid_lab_after = [r for r in labels_after_harmbench if r != -1]
-        avg_harmbench_after = sum(valid_lab_after) / len(labels_after_harmbench)
-        # print(f"Layer: {layer}, alpha_neg: {alpha_neg}, avg_harmbench_after: {avg_harmbench_after}")
+        layer_name = "all_layers"
+        # head_id = f"mitigate_top_k_{a}_non"  #
+        if th == 'cosine':
+            p_n = cosine_None[model]
+        elif th == 'final_sv':
+            p_n = final_sv_None[model]
+        elif th == 'cosine_max_sv':
+            p_n = cosine_max_sv_None[model]
+        elif th == 'cosine_mean_sv':      
+            p_n = cosine_mean_sv_None[model]
+        elif th == 'cosine_max':
+            p_n = cosine_max_None[model]
+        elif th == 'cosine_sv':
+            p_n = cosine_sv_None[model]
+        elif th == 'cosine_sign_sv':
+            p_n = cosine_sign_sv_None[model]
+        elif th == 'mean_sv':
+            p_n = mean_sv_final[model] #['a']
+        elif th == 'distance':
+            p_n = distance_final[model]
+        
+        layer = f"theta_{p_n['a']}"
 
-        alpha_pos = alphas_p[i]
-        labels_after_harmbench_pos=np.load(f"{output_dir}/{safe_model_name}/labels_steering_{side}_alpha_{alpha_pos}.npy", allow_pickle=True).item()
-        labels_after_harmbench_pos = labels_after_harmbench_pos[layer]
-        valid_lab_after_pos = [r for r in labels_after_harmbench_pos if r != -1]
-        avg_harmbench_after_pos = sum(valid_lab_after_pos) / len(labels_after_harmbench_pos)
-        res_harmbench[layer]={alpha_pos:avg_harmbench_after_pos, alpha_neg:avg_harmbench_after, 0.0: avg_harmbench}
-        # print(f"Layer: {layer}, alpha_pos: {alpha_pos}, avg_harmbench_after_pos: {avg_harmbench_after_pos}")
+        mode = 'editing'
+        top_n = p_n['a']
+        mitigate = p_n['min_lambda']
+        amplify = p_n['max_lambda']
+        head_id_mitigate = f'{mode}_top_k_{top_n}_{fil}_lambda_{mitigate}' #_non' 
+        head_id_amplify = f'{mode}_top_k_{top_n}_{fil}_lambda_{amplify}'
 
 
 
-    ########## for other datasets ##########
+        labels_after = np.load(f"{args.output_dir}/editing/{safe_model_name}/all_layers_ablation_head_{head_id_mitigate}_mean.npy", allow_pickle=True).item()['labels']
+       
+        labels_after_amplify = np.load(f"{args.output_dir}/editing/{safe_model_name}/all_layers_ablation_head_{head_id_amplify}_mean.npy", allow_pickle=True).item()['labels']
+        valid_lab_mitigate = [r for r in labels_after if r != -1]
+        avg_l_mitigate = sum(valid_lab_mitigate) / len(labels_after)
+        
+        valid_lab_amplify = [r for r in labels_after_amplify if r != -1]
+        avg_l_amplify = sum(valid_lab_amplify) / len(labels_after_amplify)
+        alpha_pos = p_n['max_lambda']
+        alpha_neg = p_n['min_lambda']
+        res_harmbench[layer]={alpha_pos:avg_l_amplify, alpha_neg:avg_l_mitigate, 0.0: avg_harmbench}
+        layers.append(layer)
 
+       
     
     res_d = {}
     for data in args.dataset:
@@ -598,65 +595,111 @@ def main(args):
         valid_lab_d = [r for r in labels_d if r != -1]
         avg_d = sum(valid_lab_d) / len(labels_d)
         res_d[data] = {}
-        for i, layer in enumerate(layers):
-            alpha_neg = alphas_n[i]
+        for i, th in enumerate(all_methods):
+            fil = th
+            layer_name = "all_layers"
+            # head_id = f"mitigate_top_k_{a}_non"  #
+            if th == 'cosine':
+                p_n = cosine_None[model]
+            elif th == 'final_sv':
+                p_n = final_sv_None[model]
+            elif th == 'cosine_max_sv':
+                p_n = cosine_max_sv_None[model]
+            elif th == 'cosine_mean_sv':      
+                p_n = cosine_mean_sv_None[model]
+            elif th == 'cosine_max':
+                p_n = cosine_max_None[model]
+            elif th == 'cosine_sv':
+                p_n = cosine_sv_None[model]
+            elif th == 'cosine_sign_sv':
+                p_n = cosine_sign_sv_None[model]
+            
+            elif th == 'mean_sv':
+                p_n = mean_sv_final[model] #['a']
+        
+            layer = f"theta_{p_n['a']}"
 
-            labels_after_d=np.load(f"{output_dir}/{safe_model_name}/labels_steering_{side}_alpha_{alpha_neg}_{safe_dataset}_{layer}.npy", allow_pickle=True).item()
-            labels_after_d = labels_after_d[layer]
-            valid_lab_after_d = [r for r in labels_after_d if r != -1]
-            avg_d_after = sum(valid_lab_after_d) / len(labels_after_d)
+
+            mode = 'editing'
+            top_n = p_n['a']
+            mitigate = p_n['min_lambda']
+            amplify = p_n['max_lambda']
+            head_id_mitigate = f'{mode}_top_k_{top_n}_{fil}_lambda_{mitigate}' #_non' 
+            head_id_amplify = f'{mode}_top_k_{top_n}_{fil}_lambda_{amplify}'
 
 
-            alpha_pos = alphas_p[i]
-            labels_after_d_pos=np.load(f"{output_dir}/{safe_model_name}/labels_steering_{side}_alpha_{alpha_pos}_{safe_dataset}_{layer}.npy", allow_pickle=True).item()
-            labels_after_d_pos = labels_after_d_pos[layer]
-            valid_lab_after_d_pos = [r for r in labels_after_d_pos if r != -1]
-            avg_d_after_pos = sum(valid_lab_after_d_pos) / len(labels_after_d_pos)
-            res_d[data][layer]={alpha_pos:avg_d_after_pos, alpha_neg:avg_d_after, 0.0: avg_d}
-    print(res_d)
 
-    # print("HarmBench avg toxicity before steering:", res_harmbench)
+            labels_after = np.load(f"{args.output_dir}/editing/{safe_model_name}/all_layers_ablation_head_{head_id_mitigate}_{safe_dataset}_mean.npy", allow_pickle=True).item()['labels']
+            
+            labels_after_amplify = np.load(f"{args.output_dir}/editing/{safe_model_name}/all_layers_ablation_head_{head_id_amplify}_{safe_dataset}_mean.npy", allow_pickle=True).item()['labels']
+            valid_lab_mitigate = [r for r in labels_after if r != -1]
+            avg_l_mitigate = sum(valid_lab_mitigate) / len(labels_after)
+            
+            valid_lab_amplify = [r for r in labels_after_amplify if r != -1]
+            avg_l_amplify = sum(valid_lab_amplify) / len(labels_after_amplify)
+            alpha_pos = p_n['max_lambda']
+            alpha_neg = p_n['min_lambda']
+            res_d[data][layer]={alpha_pos:avg_l_amplify, alpha_neg:avg_l_mitigate, 0.0: avg_d}
+
+
+
+
+
+    os.makedirs(f"/home/fe/purelku/Desktop/Master_thesis/results_ablation_plot/{safe_model_name}", exist_ok=True)
     
-    # print("ADvBench avg toxicity before steering:", res_d)
+
 
     # --- Plotting Function ---is t
     ds1_name = "walledai/HarmBench"
     ds2_name = args.dataset
-    t = 'last' if mode == 'last' else str(t)
+    fil = args.t
     # res_harmbench = res_d[list(res_d.keys())[0]]
-    plot_steering_deltas(layers, res_harmbench, res_d, ds1_name, ds2_name, safe_model_name, t=t)
-    plot_steering_results(layers, res_harmbench, res_d, ds1_name, ds2_name, safe_model_name, t=t)
+    plot_steering_deltas(layers, res_harmbench, res_d, ds1_name, ds2_name, safe_model_name, fil=fil)
+    plot_steering_results(layers, res_harmbench, res_d, ds1_name, ds2_name, safe_model_name, fil=fil)
 
    
+   
+
+ablation_theta_0_5 = {'Qwen/Qwen2.5-3B': 3, 'Qwen/Qwen2.5-3B-Instruct': 46, 'allenai/OLMo-2-0425-1B-Instruct': 23, 'allenai/OLMo-2-0425-1B': 15, 'google/gemma-2-2b-it': 20, 'meta-llama/Llama-3.2-3B-Instruct': 21, 'google/gemma-2-2b': 20, 'meta-llama/Llama-3.2-3B': 13}
+
+ablation_theta_None = {'Qwen/Qwen2.5-3B': 19, 'Qwen/Qwen2.5-3B-Instruct': 46, 'allenai/OLMo-2-0425-1B-Instruct': 25, 'allenai/OLMo-2-0425-1B': 13, 'google/gemma-2-2b-it': 20, 'meta-llama/Llama-3.2-3B-Instruct': 2, 'google/gemma-2-2b': 20, 'meta-llama/Llama-3.2-3B': 42}
+
+ablation_theta_0_3 = {'Qwen/Qwen2.5-3B': 14, 'Qwen/Qwen2.5-3B-Instruct': 43, 'allenai/OLMo-2-0425-1B-Instruct': 24, 'allenai/OLMo-2-0425-1B': 7, 'google/gemma-2-2b-it': 20, 'meta-llama/Llama-3.2-3B-Instruct': 27, 'google/gemma-2-2b': 17, 'meta-llama/Llama-3.2-3B': 27}
+
 
     
-    
-    
-
-
-# model_steering = {
-#     'meta-llama/Llama-3.2-3B-Instruct': {'layers': ['model.layers.13', 'model.layers.12', 'model.layers.14'], 'alphas_up': [1.5, 1.5, 1.5], 'alphas_down': [-0.5,  -1.0, -0.5], 'max_avg_tox': [0.765, 0.76, 0.735], 'min_avg_tox': [0.0, 0.0,  0.0]},
-
-#     'google/gemma-2-2b': {'layers': ['model.layers.8', 'model.layers.6', 'model.layers.7', 'model.layers.13'], 'alphas_up': [1.5,  1.0, 1.0, 1.5], 'alphas_down': [-0.6,  -1.5, -1.5, -0.9], 'max_avg_tox': [0.355, 0.34, 0.315, 0.35], 'min_avg_tox': [0.1, 0.05, 0.04, 0.085]},
-
-#     'meta-llama/Llama-3.2-3B': {'layers': ['model.layers.3', 'model.layers.12', 'model.layers.11', 'model.layers.10'], 'alphas_up': [1.0, 1.0,  1.0, 1.0], 'alphas_down': [0.3, -1.5,  -1.0, -1.5], 'max_avg_tox': [0.605, 0.545, 0.6, 0.575], 'min_avg_tox': [0.385, 0.365, 0.385, 0.37]},
-
-#     'allenai/OLMo-2-0425-1B-SFT': {'layers': ['model.layers.9',  'model.layers.10', 'model.layers.8'], 'alphas_up': [1.5, 1.5, 1.5], 'alphas_down': [-1.0, -0.5, -1.0], 'max_avg_tox': [0.645, 0.62, 0.565], 'min_avg_tox': [0.0, 0.0, 0.0]},
-
-#     'allenai/OLMo-2-0425-1B-DPO': {'layers': ['model.layers.9', 'model.layers.7',  'model.layers.8'], 'alphas_up': [1.5, 1.5, 1.5], 'alphas_down': [-1.0, -1.0,  -1.0], 'max_avg_tox': [0.63, 0.58, 0.565], 'min_avg_tox': [0.0, 0.0,  0.0]},
-
-#     'allenai/OLMo-2-0425-1B-Instruct': {'layers': [ 'model.layers.7', 'model.layers.8', 'model.layers.9'], 'alphas_up': [1.5, 1.5, 1.5], 'alphas_down': [ -1.0, -1.0, -1.0], 'max_avg_tox': [ 0.705, 0.69, 0.655], 'min_avg_tox': [ 0.0, 0.0, 0.0]},
-
-#     'allenai/OLMo-2-0425-1B': {'layers': ['model.layers.13', 'model.layers.3', 'model.layers.7', 'model.layers.9'], 'alphas_up': [-0.2, 0.03, -0.07, -0.06], 'alphas_down': [-0.5, -1.5, -1.5, -1.5], 'max_avg_tox': [0.41, 0.395, 0.39, 0.385], 'min_avg_tox': [0.28, 0.12, 0.135, 0.135]},
-#     }
-
 if __name__ == "__main__":
     args = parse_args()
-    for _, model in enumerate(["Qwen/Qwen2.5-3B", "Qwen/Qwen2.5-3B-Instruct", "google/gemma-2-2b", "meta-llama/Llama-3.2-3B", "allenai/OLMo-2-0425-1B", "google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct", "allenai/OLMo-2-0425-1B-Instruct"]): #"google/gemma-2-2b-it", , "allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO"
-        
-        args.model = model
-        args.t = 'last'
-        args.mode = 'last'
+    for _, model in enumerate([
+        "google/gemma-2-2b", "google/gemma-2-2b-it", "allenai/OLMo-2-0425-1B-Instruct", "allenai/OLMo-2-0425-1B",  "meta-llama/Llama-3.2-3B-Instruct", "meta-llama/Llama-3.2-3B", 
+        "Qwen/Qwen2.5-3B-Instruct","Qwen/Qwen2.5-3B"]):
+        args.model = model 
+        args.t = 'mean_sv' #'distance'
         args.dataset = ["walledai/AdvBench", "walledai/DTStereotype", "walledai/CatHarmfulQA","walledai/DTToxicity","truthfulqa/truthful_qa"]
         main(args)
-    # "google/gemma-2-2b", "meta-llama/Llama-3.2-3B", "allenai/OLMo-2-0425-1B" "LibrAI/do-not-answer"-this doesn't work
+    
+    # # for _, model in enumerate(["google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct"]): #"google/gemma-2-2b-it",
+    # args = parse_args()
+    # model = args.model
+    # ablate = args.ablate
+    # args.ablate = True
+    # if args.fil == 'cosine':
+    #     p_n = cosine_None[model]
+    # elif args.fil == 'final_sv':
+    #     p_n = final_sv_None[model]
+    # elif args.fil == 'cosine_max_sv':
+    #     p_n = cosine_max_sv_None[model]
+    # elif args.fil == 'cosine_mean_sv':      
+    #     p_n = cosine_mean_sv_None[model]
+    # elif args.fil == 'cosine_max':
+    #     p_n = cosine_max_None[model]
+    # elif args.fil == 'cosine_sv':
+    #     p_n = cosine_sv_None[model]
+    # elif args.fil == 'cosine_sign_sv':
+    #     p_n = cosine_sign_sv_None[model]
+
+    # for tp in p_n:
+    #     args.top_n = tp
+    
+
+# "meta-llama/Llama-3.2-3B", "allenai/OLMo-2-0425-1B"

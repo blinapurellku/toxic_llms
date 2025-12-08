@@ -66,7 +66,7 @@ def extrema(avg_by_layer, baseline, a_min, a_max, eps=0.0):
         )
     return res
 
-def summarize_layers(results, topk=10):
+def summarize_layers(results, topk=3):
     if not results: return {}
     # gmax = max(v["avg_toxicity_at_max_increase"] for v in results.values())
     # gmin = min(v["avg_toxicity_at_max_decrease"] for v in results.values())
@@ -81,7 +81,6 @@ def summarize_layers(results, topk=10):
         alpha_down=m["alpha_of_max_decrease"],
         range_avg=m["range_avg"],
     ) for L,m in top]
-    
     return {
         # "highest_increase": {"layer": inc[0], **inc[1]},
         # "highest_decrease": {"layer": dec[0], **dec[1]},
@@ -89,52 +88,115 @@ def summarize_layers(results, topk=10):
     }
 
 def one_model(args, model):
-    safe = re.sub(r'[\\/*?:"<>|]', "_", model)
-    d = os.path.join(args.output_dir, safe)
-    os.makedirs(d, exist_ok=True)
+    safe_model_name = re.sub(r'[\\/*?:"<>|]', "_", args.model)
+    # safe_base_name = re.sub(r'[\\/*?:"<>|]', "_", "google/gemma-2-2b")
 
-    labels_path = os.path.join(d, args.labels_filename)
-    if not os.path.exists(labels_path): raise FileNotFoundError(f"Missing baseline labels: {labels_path}")
-    labels = np.load(labels_path)
-    valid = [x for x in labels if x != -1]
-    baseline = float(np.mean(valid)) if valid else np.nan
-    d = os.path.join(args.output_dir, 'last', safe)
-    alpha2labels = load_all_alphas(d, args.side)
-    if not alpha2labels: raise RuntimeError(f"No steering files in {d} for side='{args.side}'.")
+    theta = args.theta
+    side = 'toxic' # or 'nontoxic' 'toxic'
+    save_path = os.path.join(args.output_dir, safe_model_name)
 
-    winners = summarize_layers(
-        extrema(build_avg_by_layer(alpha2labels), baseline, args.alpha_min, args.alpha_max),
-        topk=3
-    )
+    labels_before = np.load(f"{args.output_dir}/{safe_model_name}/labels.npy")
+    valid_lab = [r for r in labels_before if r != -1]
+    avg_label = sum(valid_lab) / len(labels_before)
+    # print(f"Mean toxicity label: {avg_label:.3f}, {sum(valid_lab)}/{len(labels_before)} , valid responses: {len(valid_lab)}")
+    # 2) Build a lookup of ALL named modules in the model
+    res = {}
+    # with open(os.path.join(save_path, "steered_perplexities.json")) as f:
+    #     perplexities = json.load(f)
+    # # print(perplexities.keys())
+    # with open(os.path.join(save_path, "base_perplexity.json")) as f:
+    #     base_perplexity = json.load(f)["base_perplexity"]
+    # all_p = {}
+    
+    
+    models_get ={
+    "allenai/OLMo-2-0425-1B-Instruct":25, "allenai/OLMo-2-0425-1B": 25,"Qwen/Qwen2.5-3B-Instruct":57,"Qwen/Qwen2.5-3B":57,
+            "google/gemma-2-2b-it":20,  "google/gemma-2-2b":20, "meta-llama/Llama-3.2-3B-Instruct":67 ,"meta-llama/Llama-3.2-3B":67
 
-    top3 = winners.get("top_by_range", [])[:3]
-    # layers      = [winners["highest_increase"]["layer"], winners["highest_decrease"]["layer"], *[t["layer"] for t in top3]]
-    # alphas_up   = [winners["highest_increase"]["alpha_of_max_increase"], winners["highest_decrease"]["alpha_of_max_increase"], *[t["alpha_up"] for t in top3]]
-    # alphas_down = [winners["highest_increase"]["alpha_of_max_decrease"], winners["highest_decrease"]["alpha_of_max_decrease"], *[t["alpha_down"] for t in top3]]
-    # max_avg_tox = [winners["highest_increase"]["avg_toxicity_at_max_increase"], winners["highest_decrease"]["avg_toxicity_at_max_increase"], *[t["max_avg"] for t in top3]]
-    # min_avg_tox = [winners["highest_increase"]["avg_toxicity_at_max_decrease"], winners["highest_decrease"]["avg_toxicity_at_max_decrease"], *[t["min_avg"] for t in top3]]
-    # --- START MODIFICATION: Simplify layer extraction to only use top3 by range ---
-    # The following lines are removed/modified from the original code since summarize_layers no longer returns 'highest_increase' etc.
-    layers = [t["layer"] for t in top3]
-    alphas_up = [t["alpha_up"] for t in top3]
-    alphas_down = [t["alpha_down"] for t in top3]
-    max_avg_tox = [t["max_avg"] for t in top3]
-    min_avg_tox = [t["min_avg"] for t in top3]
-
-    out = {
-        model: {
-            "layers": layers,            # aligned with top3 by range
-            "alphas_up": alphas_up, # aligned with 'layers'
-            "alphas_down": alphas_down, # aligned with 'layers'
-            "max_avg_tox": max_avg_tox, # aligned with 'layers'
-            "min_avg_tox": min_avg_tox, # aligned with 'layers'
-        }
     }
+    ablate = args.ablate
+    fil = args.fil # 'pca' or 'mean_head' or 'diff', 'cosine_diff, cosine
 
-    summary_path = os.path.join(d, args.summary_filename)
-    with open(summary_path, "w") as f: json.dump(out, f, indent=2)
-    # print(f"[summary] {model} -> {summary_path}")
-    print(out)
+    values = [
+    -3.0, -2.8, -2.6,
+    -2.5, -2.4, -2.2, -1.8, -1.6, -1.5,
+    -1.4, -1.3, -1.2, -1.1, -1.0, -0.9, -0.8, -0.7, -0.6, -0.5, -0.4, -0.3, -0.2, -0.1, 0.0,
+    0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.1, 1.2, 1.3, 1.4, 1.5,
+    1.6, 1.8, 2.2, 2.4, 2.5, 2.6, 2.8, 3.0, 
+    ]
+    mode = 'editing'
+    res[mode] = {}
+    for a in range(5, 16, 1):
+    
+        
+        res[mode][a] = []
+        for l in values:
+          # range(0, num_heads+1, 2)  # Ablate from 0 to all heads
+            top_n = a
+            head_id = f'{mode}_top_k_{top_n}_{fil}_lambda_{l}'
+
+            labels_after = np.load(f"{args.output_dir}/editing/{safe_model_name}/all_layers_ablation_head_{head_id}_mean.npy", allow_pickle=True).item()['labels']
+            
+            valid_lab_editing = [r for r in labels_after if r != -1]
+            avg_l = sum(valid_lab_editing) / len(labels_after)
+
+            # res['editing'].append({'top_n': a, 'avg_toxicity': avg_l, 'lambda': l})
+            res[mode][a].append({'lambda': l, 'avg_toxicity': avg_l})
+
+    
+    results_extrema = {}  # store extrema info per a
+
+    for a, entries in res[mode].items():
+        if not entries:  # just in case
+            continue
+
+        # highest avg_toxicity
+        max_entry = max(entries, key=lambda d: d['avg_toxicity'])
+        # lowest avg_toxicity
+        min_entry = min(entries, key=lambda d: d['avg_toxicity'])
+
+        results_extrema[a] = {
+            'max_avg_toxicity': max_entry['avg_toxicity'],
+            'max_lambda': max_entry['lambda'],
+            'min_avg_toxicity': min_entry['avg_toxicity'],
+            'min_lambda': min_entry['lambda'],
+        }
+
+    # Example: print nicely
+    for a in sorted(results_extrema):
+        info = results_extrema[a]
+        # print(
+        #     f"a={a}: "
+        #     f"max avg={info['max_avg_toxicity']:.4f} at λ={info['max_lambda']}, "
+        #     f"min avg={info['min_avg_toxicity']:.4f} at λ={info['min_lambda']}"
+        # )
+
+    best_a = None
+    best_score = -float('inf')
+
+    for a, info in results_extrema.items():
+        score = info['max_avg_toxicity'] - info['min_avg_toxicity']
+        if score > best_score:
+            best_score = score
+            best_a = a
+
+    # Retrieve the lambdas
+    overall_best = {}
+
+    overall_best[model] = {
+        
+        'a': best_a,
+        'min_lambda': results_extrema[best_a]['min_lambda'],
+        'min_avg_toxicity': results_extrema[best_a]['min_avg_toxicity'],
+        'max_lambda': results_extrema[best_a]['max_lambda'],
+        'max_avg_toxicity': results_extrema[best_a]['max_avg_toxicity'],
+    }
+    # print(overall_best)
+    return overall_best
+
+
+    
+
 
 def parse_args():
     p = argparse.ArgumentParser("Summarize layers & alphas with highest increase/decrease vs baseline in (-2, 2).")
@@ -149,17 +211,23 @@ def parse_args():
     p.add_argument("--alpha_min", type=float, default=-3.5)
     p.add_argument("--alpha_max", type=float, default=3.5)
     p.add_argument("--summary_filename", default="diff_extrema_summary.json")
+    p.add_argument("--ablate", action="store_true", help="Whether to perform ablation analysis")
+    p.add_argument("--theta", type=float, default=0.3, help="Theta value for ablation analysis")
     return p.parse_args()
 
 if __name__ == "__main__":
     args = parse_args()
-    for i, model in enumerate(#["Qwen/Qwen2.5-3B", "Qwen/Qwen2.5-3B-Instruct", "allenai/OLMo-2-0425-1B-Instruct", "allenai/OLMo-2-0425-1B",
-                                ["google/gemma-2-2b-it" #, "meta-llama/Llama-3.2-3B-Instruct", "google/gemma-2-2b", "meta-llama/Llama-3.2-3B"
-                                 ]): #"google/gemma-2-2b-it",
+    res = {}
+    for i, model in enumerate(["Qwen/Qwen2.5-3B", "Qwen/Qwen2.5-3B-Instruct", "allenai/OLMo-2-0425-1B-Instruct", "allenai/OLMo-2-0425-1B", "google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct", "google/gemma-2-2b", "meta-llama/Llama-3.2-3B"]): #"google/gemma-2-2b-it",
 
         #  "google/gemma-2-2b-it","meta-llama/Llama-3.2-3B-Instruct",
         # "google/gemma-2-2b","meta-llama/Llama-3.2-3B",
         # "allenai/OLMo-2-0425-1B-SFT","allenai/OLMo-2-0425-1B-DPO","allenai/OLMo-2-0425-1B-Instruct",
         # "allenai/OLMo-2-0425-1B"
+        args.ablate = False
+        # args.theta = 0.5
+        args.fil = 'distance' #'mean_sv'
         args.model = model
-        one_model(args, model)
+        o = one_model(args, model)
+        res.update(o)
+    print(res)

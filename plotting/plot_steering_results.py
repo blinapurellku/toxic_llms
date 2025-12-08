@@ -107,7 +107,7 @@ def main(args):
         # for x in perplexities[a]:
             # all_p = {x["layer_name"]: x["perplexity"]}
             # labels_steering_toxic_alpha_-0.5.npy
-        labels_after = np.load(f"{args.output_dir}/last/{safe_model_name}/labels_steering_{side}_alpha_{a}.npy", allow_pickle=True).item()
+        labels_after = np.load(f"{args.output_dir}/{safe_model_name}/labels_steering_{side}_alpha_{a}.npy", allow_pickle=True).item()
         layer_names = list(labels_after.keys())
         layer_names = sorted(list(labels_after.keys()), key=lambda x: int(x.split('.')[-1]))
         for layer_name in layer_names:
@@ -128,7 +128,7 @@ def main(args):
     os.makedirs(f"/home/fe/purelku/Desktop/Master_thesis/results_plot_steering/{safe_model_name}/", exist_ok=True)
     
 
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(4.5, 3.5))
 
     # Separate alphas into positive and negative
     alphas = sorted(res.keys(), key=float)  # sort for consistency
@@ -162,14 +162,14 @@ def main(args):
         plt.plot(ordered_l, ordered_av, label=rf"$\alpha$={a}", color=c)
 
     
-    plt.xlabel("Layer ID")
-    plt.ylabel("Average Toxicity")
-    plt.title(f"Steering Results for {safe_model_name}")
-    plt.legend(title=r"$\alpha$ (steering strength)", bbox_to_anchor=(1.05, 1.05), ncol=2)
-    plt.xticks(ordered_l, rotation=45)
+    plt.xlabel("Layer", size=14)
+    plt.ylabel("UOR", size=14)
+    # plt.title(f"Steering Results for {safe_model_name}")
+    # plt.legend(title=r"$\alpha$ (steering strength)", bbox_to_anchor=(1.05, 1.05), ncol=2)
+    # plt.xticks(ordered_l, rotation=45)
     plt.tight_layout()
-    plt.savefig(f"/home/fe/purelku/Desktop/Master_thesis/results_plot_steering/{safe_model_name}/{safe_model_name}_steering_results_last.png", dpi=300, bbox_inches='tight')
-    plt.savefig(f"/home/fe/purelku/Desktop/Master_thesis/results_plot_steering/{safe_model_name}/{safe_model_name}_steering_results_last.svg", format='svg', dpi=30, bbox_inches='tight')
+    plt.savefig(f"/home/fe/purelku/Desktop/Master_thesis/results_plot_steering/{safe_model_name}/{safe_model_name}_steering_results.png", dpi=300, bbox_inches='tight')
+    plt.savefig(f"/home/fe/purelku/Desktop/Master_thesis/results_plot_steering/{safe_model_name}/{safe_model_name}_steering_results.svg", format='svg', dpi=300, bbox_inches='tight')
     plt.close()
 
 
@@ -249,8 +249,11 @@ def main(args):
 
 if __name__ == "__main__":
     for i, model in enumerate([
-         "google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct", "Qwen/Qwen2.5-3B-Instruct", "allenai/OLMo-2-0425-1B-Instruct",
-           "google/gemma-2-2b", "meta-llama/Llama-3.2-3B", "allenai/OLMo-2-0425-1B", "Qwen/Qwen2.5-3B"]): 
+         "google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct", "Qwen/Qwen2.5-3B-Instruct", 
+        # "allenai/OLMo-2-0425-1B-Instruct", "allenai/OLMo-2-0425-1B",
+           "google/gemma-2-2b", "meta-llama/Llama-3.2-3B", 
+        #    "Qwen/Qwen2.5-3B"
+           ]): 
         args = parse_args()
         args.model = model
         # alpha = [-0.09, -0.08, -0.07, -0.06, -0.05, -0.04, -0.03, -0.02, -0.01]
@@ -261,7 +264,7 @@ if __name__ == "__main__":
         alpha += [-0.5, -1.0, -1.5, -2.0, -2.5, -3.0, -3.5, -4.0, -4.5, -5.0]
         # alpha += [0.05, 0.1, 0.15, 0.2, 0.25]#, 0.3, 0.35, 0.4]
         # alpha += [-0.05, -0.1, -0.15, -0.2, -0.25]#, -0.3, -0.35, -0.4]
-        alpha += [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5]  
+        alpha += [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]  
         print(f"Running evaluation for model: {args.model} with alphas: {alpha}")
         args.alpha = alpha
         main(args)

@@ -81,6 +81,7 @@ def ablation_hook(
     num_head: int = 8, # head number of the layer
     ablate: bool = True,
     fill : Optional[torch.Tensor] = None,
+    lambda_: float = 1.0,
 ) -> torch.utils.hooks.RemovableHandle:
     """
     Register a forward pre‐hook on `module` that zeroes out specific indices in its output.
@@ -98,8 +99,9 @@ def ablation_hook(
         if ablate:
             x[:, :, head, :].zero_()  # (B, L, head_dim)
         else:
-            fill = fill.to(dtype=x.dtype, device=x.device) # (head_dim)
-            x[:, :, head, :] = fill.view(1, 1, -1).expand(x.size(0), x.size(1), -1)  # (B, L, head_dim)
+            # fill = fill.to(dtype=x.dtype, device=x.device) # (head_dim)
+            # x[:, :, head, :] = fill.view(1, 1, -1).expand(x.size(0), x.size(1), -1)  # (B, L, head_dim)
+            x[:,:, head, :] = lambda_ * x[:, :, head, :]
         
         x = x.view(B, L, -1).contiguous()  # (B, L, H)
 
@@ -117,6 +119,7 @@ def register_head_ablation(
     *,
     ablate: bool=True, #str = "zero",                   # "zero" or "fill"
     fill: Optional[torch.Tensor] = None,  # (head_dim,) or (num_heads_to_fill, head_dim)
+    lambda_: float = 1.0,
 ) -> List[torch.utils.hooks.RemovableHandle]:
     """
     Register forward pre-hooks on *named* o_proj modules to ablate specific heads.
@@ -161,10 +164,11 @@ def register_head_ablation(
             if ablate: #mode == "zero":
                 x.index_fill_(dim=2, index=heads.to(x.device), value=0.0)
             else:
-                fill = fill.to(dtype=x.dtype, device=x.device) # (H, head_dim)
+                # fill = fill.to(dtype=x.dtype, device=x.device) # (H, head_dim)
                 for idx, h in enumerate(heads.tolist()):
+                    x[:, :, h, :] = lambda_ * x[:, :, h, :]
                     # fill_local = fill[h].view(1,1,-1).expand(x.size(0), x.size(1), -1) # (B, L, head_dim)
-                    x[:, :, h, :] = fill[h].view(1,1,-1).expand(x.size(0), x.size(1), -1) # (B, L, head_dim) fill_local
+                    # x[:, :, h, :] = fill[h].view(1,1,-1).expand(x.size(0), x.size(1), -1) # (B, L, head_dim) fill_local
             # else:
             #     raise ValueError("mode must be 'zero' or 'fill'.")
 

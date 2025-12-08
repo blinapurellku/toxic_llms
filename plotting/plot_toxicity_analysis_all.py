@@ -234,16 +234,24 @@ def main(args):
             }
 
 
-
+# gemma it : 1.2 for layer 12
     model_steering_last = {'Qwen/Qwen2.5-3B': {'layers': ['model.layers.19', 'model.layers.20'], 'alphas_up': [2.2,1.6], 'alphas_down': [-2.5,  -2.0], 'max_avg_tox': [0.82, 0.76, 0.785], 'min_avg_tox': [0.265, 0.265, 0.295]},
     'Qwen/Qwen2.5-3B-Instruct': {'layers': [ 'model.layers.21', 'model.layers.22'], 'alphas_up': [2.0, 2.0], 'alphas_down': [-0.9, -0.8], 'max_avg_tox': [0.68, 0.645, 0.645], 'min_avg_tox': [0.0, 0.0, 0.0]},
     'allenai/OLMo-2-0425-1B-Instruct': {'layers': ['model.layers.9', 'model.layers.8', 'model.layers.7'], 'alphas_up': [1.8, 2.0, 2.0], 'alphas_down': [-1.0, -0.9, -1.5], 'max_avg_tox': [0.64, 0.62, 0.565], 'min_avg_tox': [0.0, 0.0, 0.005]},
     'allenai/OLMo-2-0425-1B': {'layers': ['model.layers.7', 'model.layers.5', 'model.layers.4'], 'alphas_up': [-0.2, -0.4, -0.3], 'alphas_down': [2.0, 1.8, -1.8], 'max_avg_tox': [0.41, 0.415, 0.4], 'min_avg_tox': [0.1, 0.14, 0.155]},
-    'google/gemma-2-2b-it': {'layers': [ 'model.layers.10', 'model.layers.12'], 'alphas_up': [ 2.2, 1.0], 'alphas_down': [-2.2, -0.2], 'max_avg_tox': [0.42, 0.385, 0.26], 'min_avg_tox': [0.0, 0.0, 0.0]},
+    'google/gemma-2-2b-it': {'layers': [ 'model.layers.10', 'model.layers.12'], 'alphas_up': [ 2.2, 1.2], 'alphas_down': [-2.2, -1.0], 'max_avg_tox': [0.42, 0.385, 0.26], 'min_avg_tox': [0.0, 0.0, 0.0]},
     'meta-llama/Llama-3.2-3B-Instruct': {'layers': ['model.layers.12','model.layers.13' ], 'alphas_up': [2.0, 2.0], 'alphas_down': [-0.8, -1.1], 'max_avg_tox': [0.685, 0.65, 0.655], 'min_avg_tox': [0.0, 0.0, 0.005]},
     'google/gemma-2-2b': {'layers': [ 'model.layers.6', 'model.layers.7'], 'alphas_up': [1.4, 1.4], 'alphas_down': [-1.8, -2.0], 'max_avg_tox': [0.4, 0.3, 0.325], 'min_avg_tox': [0.05, 0.03, 0.07]},
     'meta-llama/Llama-3.2-3B': {'layers': ['model.layers.10', 'model.layers.11'], 'alphas_up': [1.8, 1.3], 'alphas_down': [-2.0, -1.8], 'max_avg_tox': [0.56, 0.59, 0.575], 'min_avg_tox': [0.335, 0.37, 0.375]}}
 
+    # model_steering_last = {'Qwen/Qwen2.5-3B': {'layers': ['model.layers.19', 'model.layers.22', 'model.layers.20'], 'alphas_up': [2.0, 1.5, 1.6], 'alphas_down': [-1.8, -2.0, -1.5], 'max_avg_tox': [0.82, 0.76, 0.785], 'min_avg_tox': [0.265, 0.265, 0.295]},
+    #     'Qwen/Qwen2.5-3B-Instruct': {'layers': ['model.layers.24', 'model.layers.22', 'model.layers.23'], 'alphas_up': [2.0, 2.0, 2.0], 'alphas_down': [-0.9, -0.8, -0.9], 'max_avg_tox': [0.68, 0.645, 0.645], 'min_avg_tox': [0.0, 0.0, 0.0]},
+    #     'allenai/OLMo-2-0425-1B-Instruct': {'layers': ['model.layers.9', 'model.layers.8', 'model.layers.7'], 'alphas_up': [1.8, 2.0, 2.0], 'alphas_down': [-1.0, -0.9, -1.5], 'max_avg_tox': [0.64, 0.62, 0.565], 'min_avg_tox': [0.0, 0.0, 0.005]},
+    #     'allenai/OLMo-2-0425-1B': {'layers': ['model.layers.7', 'model.layers.5', 'model.layers.4'], 'alphas_up': [-0.2, -0.4, -0.3], 'alphas_down': [2.0, 1.8, -1.8], 'max_avg_tox': [0.41, 0.415, 0.4], 'min_avg_tox': [0.1, 0.14, 0.155]},
+    #     'google/gemma-2-2b-it': {'layers': ['model.layers.25', 'model.layers.24', 'model.layers.9'], 'alphas_up': [0.9, 0.9, 2.0], 'alphas_down': [-0.3, -0.5, -0.2], 'max_avg_tox': [0.42, 0.385, 0.23], 'min_avg_tox': [0.0, 0.0, 0.005]},
+    #     'meta-llama/Llama-3.2-3B-Instruct': {'layers': ['model.layers.13', 'model.layers.14', 'model.layers.16'], 'alphas_up': [2.0, 2.0, 1.8], 'alphas_down': [-1.1, -1.3, -1.1], 'max_avg_tox': [0.685, 0.65, 0.655], 'min_avg_tox': [0.0, 0.0, 0.005]},
+    #     'google/gemma-2-2b': {'layers': ['model.layers.7', 'model.layers.6', 'model.layers.12'], 'alphas_up': [1.4, 1.4, 1.2], 'alphas_down': [-2.0, -1.8, -1.5], 'max_avg_tox': [0.4, 0.3, 0.325], 'min_avg_tox': [0.05, 0.03, 0.07]},
+    #     'meta-llama/Llama-3.2-3B': {'layers': ['model.layers.10', 'model.layers.11', 'model.layers.7'], 'alphas_up': [1.8, 1.3, 1.4], 'alphas_down': [-2.0, -1.8, -1.2], 'max_avg_tox': [0.56, 0.59, 0.575], 'min_avg_tox': [0.335, 0.37, 0.375]}}
 
     print(args.model)
     
@@ -262,11 +270,21 @@ def main(args):
     
     t = args.t
     res_harmbench = {}
-    methods_all = ['all', 'last', 'lda_svd', 'euclidean', 'linear_regression'] 
+    methods_all = ['all', 'last', 'euclidean', 'lda_svd', 'linear_regression'] 
     res_up = {}
     res_down = {}
-    plt.figure(figsize=(12, 4))
-    for i, layer in enumerate(layers):
+    # plt.figure(figsize=(12, 4))
+    n_layers = len(layers[:1])
+    # Wider figure if many layers
+    fig_width = max(6, 3 * n_layers)
+    fig, axes = plt.subplots(
+        1, n_layers,
+        sharey=True,
+        figsize=(5, 3),
+        # squeeze=False
+    )
+    axes = axes.flatten() if n_layers > 1 else [axes]
+    for i, layer in enumerate(layers[:1]):
         print('layer=', layer)
         res_up[layer] = {}
         res_down[layer] = {}
@@ -285,52 +303,68 @@ def main(args):
             res_up[layer][method] = np.mean(res_p)
             res_down[layer][method] = np.mean(res_n)
         
-        plt.subplot(1, len(layers), i+1)
+        # plt.subplot(1, n_layers, i+1)#, sharey=True)
+        axes = plt.gca()
+        # Remove top and right spines (axes)
+        axes = plt.gca()
+        for s in ['top', 'bottom', 'left', 'right']:
+            axes.spines[s].set_linewidth(0.4)
+
+        axes.spines['top'].set_visible(False)
+        axes.spines['right'].set_visible(False)
+        # Make axis borders (spines) thinner
+        
         methods = list(res_up[layer].keys())
         up_values = [res_up[layer][m] for m in methods]
         down_values = [res_down[layer][m] for m in methods] 
         x = np.arange(len(methods))
         width = 0.15
-        bars_up = plt.bar(x - width/2, up_values, width, label='Amplify', color='red')
-        bars_down = plt.bar(x + width/2, down_values, width, label='Mitigate', color='green')
+        bars_up = plt.bar(x - width/2, up_values, width, label=r'$\alpha \uparrow$', color='red')
+        bars_down = plt.bar(x + width/2, down_values, width, label=r'$\alpha \downarrow$', color='blue')
 
         # Add a horizontal line at 0 for reference
-        plt.axhline(0, color='blue', linestyle='--', linewidth=1.2)
+        plt.axhline(0, color='gray', linestyle='--', linewidth=1.2, label=r'$\alpha = 0$')
 
         # Add value labels above each bar
         for bar in bars_up:
             height = bar.get_height()
-            sign = np.sign(height)
+            y = height + 0.01 if height >= 0 else height - 0.01
+            va = 'bottom' if height >= 0 else 'top'
             plt.text(
                 bar.get_x() + bar.get_width() / 2,      # x position (center of bar)
-                height + sign * 0.05 * max(up_values + down_values),  # y position slightly above the bar
+                y,  # y position slightly above the bar
                 f"{height:.2f}",                        # format to 2 decimal places
-                ha='center', va='bottom', fontsize=8, color='black'
+                ha='center', va=va, fontsize=8, color='black'
             )
 
         for bar in bars_down:
             height = bar.get_height()
-            sign = np.sign(height)
+            y = height + 0.01 if height >= 0 else height - 0.01
+            va = 'bottom' if height >= 0 else 'top'
+
             plt.text(
                 bar.get_x() + bar.get_width() / 2,
-                height + sign * 0.1 * max(up_values + down_values),
+                y,
                 f"{height:.2f}",
-                ha='center', va='bottom', fontsize=8, color='black'
+                ha='center', va=va, fontsize=8, color='black'
             )
-
+        methods = ['FullSequence', 'LastToken', r'Dynamic $\alpha$', 'LDA', 'LogReg']
         # plt.ylim(0, max(max(up_values), max(down_values)) * 1.1)
         if i == 1:
             plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-        plt.title(f"{layer}")
-        plt.xticks(x, methods, rotation=45, ha='right')
+        plt.title(f"Layer {layer.split('.')[-1]}", fontsize=12)
+        plt.xticks(x, methods, rotation=90, fontsize=12)
         a = np.amax(up_values)
         b = np.amin(down_values)
+        plt.ylabel(r"$\Delta$UOR", fontsize=12)
         plt.ylim(b-0.1, a+0.1)
-    plt.suptitle(args.model)
+    # plt.suptitle(args.model)
     plt.tight_layout()
 
     os.makedirs('/home/fe/purelku/Desktop/Master_thesis/all_steering_plots', exist_ok=True)
     plt.savefig(f'/home/fe/purelku/Desktop/Master_thesis/all_steering_plots/toxicity_steering_all_methods_{safe_model_name}.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'/home/fe/purelku/Desktop/Master_thesis/all_steering_plots/toxicity_steering_all_methods_{safe_model_name}.svg',format='svg', dpi=300, bbox_inches='tight')
+
     plt.close()
 
     print("Results UP:", res_up)

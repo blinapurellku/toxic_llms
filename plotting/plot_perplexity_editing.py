@@ -89,9 +89,15 @@ def main(args):
     # args = parse_args()
 
     safe_model_name = re.sub(r'[\\/*?:"<>|]', "_", args.model)
-    save_dir = os.path.join(args.output_dir, safe_model_name)
+    save_dir  = os.path.join(args.output_dir, safe_model_name)
+    fil = 'mean_sv' #'distance'
+    ablate = False
+    if ablate:
+        ablate_str = "ablate"
+    else:
+        ablate_str = f"theta"
     # Load JSON
-    with open(os.path.join(save_dir, "steered_perplexities.json")) as f:
+    with open(os.path.join(save_dir, f"edited_perplexities_{fil}_{ablate_str}.json")) as f:
     # with open(os.path.join(save_dir, "abladed_perplexities_pca.json")) as f:
         perplexities = json.load(f)
 
@@ -104,7 +110,7 @@ def main(args):
     # Separate alphas into positive and negative
     alpha = sorted(perplexities.keys(), key=float)  # sort for consistency
     print(alpha)
-    pos_alphas = [a for a in alpha if float(a) > 0 and float(a) != 10.0]
+    pos_alphas = [a for a in alpha if float(a) >= 0 and float(a) != 10.0]
     neg_alphas = [a for a in alpha if float(a) < 0 and float(a) != - 10.0]
 
     # Create color maps: Reds for positive, Blues for negative
@@ -114,35 +120,35 @@ def main(args):
     blues = cm.Blues(np.linspace(0.2, 0.9, len(neg_alphas)))
     # blues = cm.Blues(np.linspace(0.4, 0.9, len(neg_alphas))) # lighter → darker blues
     plt.axhline(y=base_perplexity, linestyle="--", color="gray", linewidth=1.5,
-            label=rf"$\alpha$=0")
+            label=rf"$\lambda$=1")
     # Plot positives
     for a, c in zip(pos_alphas, reds):
-        layer_names = [int(x["layer_name"].split('.')[-1]) for x in perplexities[a]]
+        layer_names = [int(x["top_n"]) for x in perplexities[a]]
         avg_toxicities = [x["perplexity"] for x in perplexities[a]]
         inx = np.argsort(layer_names)
         ordered_l = np.array(layer_names)[inx]
         ordered_av = np.array(avg_toxicities)[inx]
-        plt.plot(ordered_l, ordered_av, label=rf"$\alpha$={a}", color=c)
+        plt.plot(ordered_l, ordered_av, label=rf"$\lambda$={a}", color=c)
 
     # Plot negatives
     for a, c in zip(neg_alphas, blues):
-        layer_names = [int(x["layer_name"].split('.')[-1]) for x in perplexities[a]]
+        layer_names = [int(x["top_n"]) for x in perplexities[a]]
         avg_toxicities = [x["perplexity"] for x in perplexities[a]]
         inx = np.argsort(layer_names)
         ordered_l = np.array(layer_names)[inx]
         ordered_av = np.array(avg_toxicities)[inx]
-        plt.plot(ordered_l, ordered_av, label=rf"$\alpha$={a}", color=c)
+        plt.plot(ordered_l, ordered_av, label=rf"$\lambda$={a}", color=c)
 
     
-    plt.xlabel("Layer", size=14)
+    plt.xlabel("# Heads", size=14)
     plt.ylabel("Perplexity [log scale]", size=14)
     plt.yscale("log")
     # plt.title(f"Results for {safe_model_name}")
-    # plt.legend(title=r"$\alpha$ (steering strength)", bbox_to_anchor=(1.05, 1.05), ncol=2)
+    # plt.legend(title=r"$\lambda$ (editing strength)", bbox_to_anchor=(1.05, 1.05), ncol=2)
     # plt.xticks(ordered_l, rotation=45)
     plt.tight_layout()
-    plt.savefig(f"/home/fe/purelku/Desktop/Master_thesis/results_steering_plot/{safe_model_name}_perplexity_results_last_1.png", dpi=300)
-    plt.savefig(f"/home/fe/purelku/Desktop/Master_thesis/results_steering_plot/{safe_model_name}_perplexity_results_last_1.svg", format='svg', dpi=30, bbox_inches='tight')
+    plt.savefig(f"/home/fe/purelku/Desktop/Master_thesis/results_ablation_plot/{safe_model_name}/{safe_model_name}_perplexity_results_editing_{fil}.png", dpi=300)
+    plt.savefig(f"/home/fe/purelku/Desktop/Master_thesis/results_ablation_plot/{safe_model_name}/{safe_model_name}_perplexity_results_editing_{fil}.svg", format='svg', dpi=300, bbox_inches='tight')
     plt.close()
     
 
@@ -152,7 +158,7 @@ def main(args):
 
     for a in perplexities:
         for entry in perplexities[a]:
-            layer = entry["layer_name"]
+            layer = entry["top_n"]
             perp = entry["perplexity"]
             if layer not in layer_perplexities:
                 layer_perplexities[layer] = []
@@ -172,7 +178,7 @@ def main(args):
     # Sort by numeric ID instead of full layer name
     sorted_layers = sorted(
         layer_perplexities.items(),
-        key=lambda kv: int(kv[0].split('.')[-1])  # get numeric layer id
+        key=lambda kv: int(kv[0])  # get numeric layer id
     )
 
     colors = cm.viridis(np.linspace(0, 1, len(sorted_layers)))
@@ -181,20 +187,20 @@ def main(args):
         values.sort(key=lambda x: x[0])  # sort by alpha
         alphas = [v[0] for v in values]
         perps = [v[1] for v in values]
-        layer_id = int(layer.split('.')[-1])  # just number for label
-        plt.plot(alphas, perps, label=f"Layer {layer_id}", color=colors[i])
+        layer_id = int(layer)  # just number for label
+        plt.plot(alphas, perps, label=f"# Heads {layer_id}", color=colors[i])
 
-    # Step 5: Labels, legend, grid
+    # # Step 5: Labels, legend, grid
     plt.xlabel("Alpha", size=14)
-    # plt.xticks(all_alphas, rotation=45)
-    plt.ylabel("Perplexity [log scale]")
+    # # plt.xticks(all_alphas, rotation=45)
+    plt.ylabel("Perplexity [log scale]", size=14)
     plt.yscale("log")
-    plt.title(f"Perplexity {safe_model_name}")
+    # plt.title(f"Perplexity {safe_model_name}")
     plt.grid(True)
     # plt.legend(fontsize="small", loc="best")
     plt.tight_layout()
     plt.savefig(
-        f"/home/fe/purelku/Desktop/Master_thesis/results_steering_plot/{safe_model_name}_perplexity_layer_log_last_1.png",
+        f"/home/fe/purelku/Desktop/Master_thesis/results_ablation_plot/{safe_model_name}/{safe_model_name}_perplexity_editing_layer_log_{fil}.png",
         dpi=300
     )
     plt.show()
@@ -220,11 +226,11 @@ if __name__ == "__main__":
         # alpha += [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0]
 
         alpha = [-2.4, -2.2, -1.8, -1.6, -1.4, -1.3, -1.2, -1.1, -0.9, -0.8, -0.7, -0.6, -0.4, -0.3, 
-                -0.2, -0.1, 0.1, 0.2, 0.3, 0.4, 0.6, 0.7, 0.8, 0.9, 1.1, 1.2, 1.3, 1.4, 1.6, 1.8, 2.2, 2.4]
+                -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.6, 0.7, 0.8, 0.9, 1.1, 1.2, 1.3, 1.4, 1.6, 1.8, 2.2, 2.4]
 
         alpha += [-0.5, -1.0, -1.5, -2.0, -2.5, -3.0, -3.5, -4.0, -4.5, -5.0]
        
-        alpha += [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0] 
+        alpha += [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5]#, 5.0] 
         
         print(f"Running evaluation for model: {args.model} with alphas: {alpha}")
         # for a in alpha:

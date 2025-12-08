@@ -6,6 +6,7 @@ from typing import Optional
 
 from matplotlib import cm, pyplot as plt
 import torch
+import seaborn as sns
 
 os.environ["TORCHINDUCTOR_DISABLE"] = "1"
 os.environ["TORCH_COMPILE"] = "0"
@@ -99,105 +100,117 @@ def main(args):
         base_perplexity = json.load(f)["base_perplexity"]
 
     print(list(perplexities.keys()))
-    plt.figure(figsize=(4.5, 3.5))
+    plt.figure(figsize=(10, 6))
 
     # Separate alphas into positive and negative
     alpha = sorted(perplexities.keys(), key=float)  # sort for consistency
-    print(alpha)
-    pos_alphas = [a for a in alpha if float(a) > 0 and float(a) != 10.0]
-    neg_alphas = [a for a in alpha if float(a) < 0 and float(a) != - 10.0]
+    
+    labels_before = np.load(f"{args.output_dir}/{safe_model_name}/labels.npy")
+    valid_lab = [r for r in labels_before if r != -1]
+    avg_label = sum(valid_lab) / len(labels_before)
 
-    # Create color maps: Reds for positive, Blues for negative
-    reds = cm.Reds(np.linspace(0.2, 0.9, len(pos_alphas)))   # lighter → darker reds
+    alphas_all = [a for a in alpha if float(a) < 2.5 and float(a) > -2.5]
+    alphas_all = [a for a in alpha if float(a) < 5 and float(a) >-5]
 
-    neg_alphas = sorted([a for a in alpha if float(a) < 0], key=lambda x: abs(float(x)))
-    blues = cm.Blues(np.linspace(0.2, 0.9, len(neg_alphas)))
-    # blues = cm.Blues(np.linspace(0.4, 0.9, len(neg_alphas))) # lighter → darker blues
-    plt.axhline(y=base_perplexity, linestyle="--", color="gray", linewidth=1.5,
-            label=rf"$\alpha$=0")
-    # Plot positives
-    for a, c in zip(pos_alphas, reds):
-        layer_names = [int(x["layer_name"].split('.')[-1]) for x in perplexities[a]]
-        avg_toxicities = [x["perplexity"] for x in perplexities[a]]
-        inx = np.argsort(layer_names)
-        ordered_l = np.array(layer_names)[inx]
-        ordered_av = np.array(avg_toxicities)[inx]
-        plt.plot(ordered_l, ordered_av, label=rf"$\alpha$={a}", color=c)
+    res = {}
+    side= 'toxic' # or 'nontoxic' 'toxic'
+    for a in alphas_all: 
+        res[a] = []
+        # a = str(a)
+        # for x in perplexities[a]:
+            # all_p = {x["layer_name"]: x["perplexity"]}
+            # labels_steering_toxic_alpha_-0.5.npy
+        labels_after = np.load(f"{args.output_dir}/last/{safe_model_name}/labels_steering_{side}_alpha_{a}.npy", allow_pickle=True).item()
+        layer_names = list(labels_after.keys())
+        layer_names = sorted(list(labels_after.keys()), key=lambda x: int(x.split('.')[-1]))
+        for layer_name in layer_names:
+            valid_lab = [r for r in labels_after[layer_name] if r != -1]
+            # print(a, layer_name)
+            # print(len(valid_lab), len(labels_after[layer_name]))
+            avg_l = sum(valid_lab) / len(labels_after[layer_name])
+            res[a].append(
+                {
+                    "layer_name": layer_name,
+                    "avg_toxicity": avg_l,
+                    # "perplexity": all_p[layer_name],
+                }
+            )
+        # ----------------------------------------------------------
+    # Build PPL vs toxicity data per layer
+    # ----------------------------------------------------------
+    layer_to_ppl = {layer_name: [] for layer_name in layer_names}
+    layer_to_tox = {layer_name: [] for layer_name in layer_names}
 
-    # Plot negatives
-    for a, c in zip(neg_alphas, blues):
-        layer_names = [int(x["layer_name"].split('.')[-1]) for x in perplexities[a]]
-        avg_toxicities = [x["perplexity"] for x in perplexities[a]]
-        inx = np.argsort(layer_names)
-        ordered_l = np.array(layer_names)[inx]
-        ordered_av = np.array(avg_toxicities)[inx]
-        plt.plot(ordered_l, ordered_av, label=rf"$\alpha$={a}", color=c)
+    for a in alphas_all:
+        # sort perplexities by layer index to match layer_names order
+        layer_n = [int(x["layer_name"].split('.')[-1]) for x in perplexities[a]]
+        sorted_indices = np.argsort(layer_n)
+
+        avg_perplexities = [x["perplexity"] for x in perplexities[a]]
+        avg_perplexities = [avg_perplexities[i] for i in sorted_indices]
+
+        avg_toxicities = [x["avg_toxicity"] for x in res[a]]
+
+        for i, layer_name in enumerate(layer_names):
+            layer_to_ppl[layer_name].append(avg_perplexities[i])
+            layer_to_tox[layer_name].append(avg_toxicities[i])
+
+        # ----------------------------------------------------------
+    # Global perplexity vs toxicity curve (one point per alpha)
+    # ----------------------------------------------------------
+    ppl_mean = {}
+    tox_mean = {}
+
+    for a in alphas_all:
+        # sort perplexities by layer index to match layer_names order
+        layer_n = [int(x["layer_name"].split('.')[-1]) for x in perplexities[a]]
+        sorted_indices = np.argsort(layer_n)
+
+        avg_perplexities = [x["perplexity"] for x in perplexities[a]]
+        avg_perplexities = [avg_perplexities[i] for i in sorted_indices]
+
+        avg_toxicities = [x["avg_toxicity"] for x in res[a]]
+
+        # global mean over layers for this alpha
+        ppl_mean[a] = float(np.mean(avg_perplexities))
+        tox_mean[a] = float(np.mean(avg_toxicities))
+
+    # sort by alpha value
+    alphas_sorted = sorted(alphas_all, key=float)
+    ppl_vals = np.array([ppl_mean[a] for a in alphas_sorted])
+    tox_vals = np.array([tox_mean[a] for a in alphas_sorted])
+
+    plt.figure(figsize=(7, 5))
+    plt.plot(ppl_vals, tox_vals, marker="o", linestyle="-")
+
+    # optional: label some alphas on the curve (e.g. every 5th)
+    for idx in range(0, len(alphas_sorted), max(1, len(alphas_sorted)//10)):
+        a = alphas_sorted[idx]
+        plt.text(ppl_mean[a], tox_mean[a], f"{float(a):.1f}", fontsize=7, alpha=0.7)
+
+    plt.xlabel("Mean perplexity across layers")
+    plt.ylabel("Mean toxicity (UOR) across layers")
+    plt.title(f"Global perplexity–toxicity trade-off\n{safe_model_name}")
+    plt.tight_layout()
+
+    out_dir = f"/home/fe/purelku/Desktop/Master_thesis/perplexity_toxicity_tradeoff/{safe_model_name}"
+    os.makedirs(out_dir, exist_ok=True)
+    png_path = os.path.join(out_dir, f"{safe_model_name}_global_ppl_vs_toxicity_curve.png")
+    svg_path = os.path.join(out_dir, f"{safe_model_name}_global_ppl_vs_toxicity_curve.svg")
+    plt.savefig(png_path, dpi=300, bbox_inches="tight")
+    plt.savefig(svg_path, format="svg", dpi=300, bbox_inches="tight")
+    plt.close()
+
+
+
 
     
-    plt.xlabel("Layer", size=14)
-    plt.ylabel("Perplexity [log scale]", size=14)
-    plt.yscale("log")
-    # plt.title(f"Results for {safe_model_name}")
-    # plt.legend(title=r"$\alpha$ (steering strength)", bbox_to_anchor=(1.05, 1.05), ncol=2)
-    # plt.xticks(ordered_l, rotation=45)
-    plt.tight_layout()
-    plt.savefig(f"/home/fe/purelku/Desktop/Master_thesis/results_steering_plot/{safe_model_name}_perplexity_results_last_1.png", dpi=300)
-    plt.savefig(f"/home/fe/purelku/Desktop/Master_thesis/results_steering_plot/{safe_model_name}_perplexity_results_last_1.svg", format='svg', dpi=30, bbox_inches='tight')
+
+    # plt.savefig(f"/home/fe/purelku/Desktop/Master_thesis/results_steering_plot/{safe_model_name}_perplexity_results_last.png", dpi=300)
+    # plt.savefig(f"/home/fe/purelku/Desktop/Master_thesis/results_steering_plot/{safe_model_name}_perplexity_results_last.svg", format='svg', dpi=30, bbox_inches='tight')
     plt.close()
     
 
-
-   # Step 1: Collect perplexities per layer across all alphas
-    layer_perplexities = {}  # {layer_name: [(alpha, perplexity), ...]}
-
-    for a in perplexities:
-        for entry in perplexities[a]:
-            layer = entry["layer_name"]
-            perp = entry["perplexity"]
-            if layer not in layer_perplexities:
-                layer_perplexities[layer] = []
-            layer_perplexities[layer].append((float(a), perp))
-
-    # Step 2: Sort alpha values in increasing order
-    all_alphas = sorted([float(a) for a in perplexities.keys()])
-
-    # Step 3: Plot setup
-    plt.figure(figsize=(4.5, 3.5))
-
-    # Horizontal line for base perplexity
-    plt.axhline(y=base_perplexity, linestyle="--", color="gray", linewidth=1.5,
-                label=r"$\alpha=0$ (base)")
-
-    # Step 4: Plot each layer's perplexity curve
-    # Sort by numeric ID instead of full layer name
-    sorted_layers = sorted(
-        layer_perplexities.items(),
-        key=lambda kv: int(kv[0].split('.')[-1])  # get numeric layer id
-    )
-
-    colors = cm.viridis(np.linspace(0, 1, len(sorted_layers)))
-
-    for i, (layer, values) in enumerate(sorted_layers):
-        values.sort(key=lambda x: x[0])  # sort by alpha
-        alphas = [v[0] for v in values]
-        perps = [v[1] for v in values]
-        layer_id = int(layer.split('.')[-1])  # just number for label
-        plt.plot(alphas, perps, label=f"Layer {layer_id}", color=colors[i])
-
-    # Step 5: Labels, legend, grid
-    plt.xlabel("Alpha", size=14)
-    # plt.xticks(all_alphas, rotation=45)
-    plt.ylabel("Perplexity [log scale]")
-    plt.yscale("log")
-    plt.title(f"Perplexity {safe_model_name}")
-    plt.grid(True)
-    # plt.legend(fontsize="small", loc="best")
-    plt.tight_layout()
-    plt.savefig(
-        f"/home/fe/purelku/Desktop/Master_thesis/results_steering_plot/{safe_model_name}_perplexity_layer_log_last_1.png",
-        dpi=300
-    )
-    plt.show()
 
    
 
@@ -224,7 +237,7 @@ if __name__ == "__main__":
 
         alpha += [-0.5, -1.0, -1.5, -2.0, -2.5, -3.0, -3.5, -4.0, -4.5, -5.0]
        
-        alpha += [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0] 
+        alpha += [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5]#, 5.0] 
         
         print(f"Running evaluation for model: {args.model} with alphas: {alpha}")
         # for a in alpha:

@@ -80,6 +80,7 @@ def parse_args():
     p.add_argument("--system_message", type=str, default=None,
                    help="System message for the chat template, if applicable")
     return p.parse_args()
+from scipy.ndimage import gaussian_filter1d
 
 
 def main(args):
@@ -107,7 +108,7 @@ def main(args):
     alphas = np.array(list(perplexities.keys()))
     
     alphas = sorted([float(a) for a in alphas])
-    alphas = [a for a in alphas if a in args.alpha]
+    alphas = [a for a in alphas if a in args.alpha and a <= 5 and a >= -5]
     
 
     print(f"Alphas found: {alphas}")
@@ -152,7 +153,7 @@ def main(args):
                                   ordered=True)
 
 #################################################################################################
-    plt.figure(figsize=(8, 6))
+    plt.figure(figsize=(4.5, 3.5))
 
     # --- size = layer (recompute before plotting) ---
     # layers, layer_codes = np.unique(df["layer_name"].str.split('.').str[-1].astype(float).values, return_inverse=True)
@@ -185,11 +186,52 @@ def main(args):
         s=sizes,
         c=df["color"].tolist(),
         alpha=0.8,
-        edgecolors="k",
+        # edgecolors="k",
         linewidths=0.5,
         label=rf"$\alpha$={a}"
     )
+   
     plt.yscale("log")
+
+    # --- binned & smoothed mean curve (toxicity -> perplexity) ---
+    x = df["avg_toxicity"].values
+    y = df["perplexity"].values
+
+    # work in log-space for perplexity because axis is log
+    logy = np.log10(y)
+
+    # choose number of bins (tune as you like)
+    n_bins = 25
+    bins = np.linspace(x.min(), x.max(), n_bins)
+    digitized = np.digitize(x, bins)
+
+    bin_centers = []
+    bin_log_means = []
+
+    for i in range(1, len(bins)):
+        mask = digitized == i
+        if mask.sum() >= 5:  # require at least 5 points per bin
+            bin_centers.append(x[mask].mean())
+            bin_log_means.append(logy[mask].mean())
+
+    smooth_line = None
+    if bin_centers:
+        bin_centers = np.array(bin_centers)
+        bin_log_means = np.array(bin_log_means)
+
+        bin_log_smooth = gaussian_filter1d(bin_log_means, sigma=1.0)
+        bin_smooth = 10 ** bin_log_smooth
+
+
+        smooth_line, = plt.plot(
+            bin_centers,
+            bin_smooth,
+            color="black",
+            linewidth=2,
+            label="mean",
+            zorder=5,
+        )
+
     # --- base perplexity line ---
     plt.axhline(y=base_perplexity, linestyle="--", color="gray", linewidth=1.5,
                 label=r"$\alpha=0$ (base)")
@@ -197,19 +239,12 @@ def main(args):
 
     print(plt.gca().get_yscale())
     # --- labels & title ---
-    plt.ylabel("Perplexity")
+    plt.ylabel("Perplexity [log]", size=14)
     plt.yscale("log")
-    plt.xlabel("Average toxicity")
-    plt.title(f"Perplexity vs. Toxicity {safe_model_name}")
+    plt.xlabel("UOR", size=14)
+    # plt.title(f"Perplexity vs. Toxicity {safe_model_name}")
 
-    # --- size legend (layers) ---
-    # layer_handles = [
-    #     plt.scatter([], [], s=size_min + (i / (len(layers)-1 if len(layers) > 1 else 1)) * (size_max - size_min),
-    #                 edgecolors="k", facecolors="gray")
-    #     for i in range(len(layers))
-    # ]
-    # plt.legend(layer_handles, layers, title="Layer (size)",
-    #         loc="upper left", bbox_to_anchor=(1.02, 1.0))
+   
 
     # --- color legend (alpha groups) ---
     pos_handles = [plt.Line2D([0], [0], marker="o", linestyle="", color=reds[i]) for i in range(len(pos_alphas))]
@@ -217,13 +252,25 @@ def main(args):
     nul_handle = [plt.Line2D([0], [0], linestyle="--", color="gray", linewidth=0.5)]
     alpha_handles = nul_handle + pos_handles + neg_handles
     alpha_labels = [r"$\alpha=0$ (base)"] + [rf"$\alpha$={a:g}" for a in pos_alphas] + [rf"$\alpha$={a:g}" for a in neg_alphas]
+        # after your alpha legend:
+    # legend for smoothed curve (if it exists)
+    # if smooth_line is not None:
+    #     curve_legend = plt.legend(
+    #         [smooth_line],
+    #         ["binned mean (smoothed)"],
+    #         loc="lower left",
+    #         frameon=True,
+    #     )
+    #     plt.gca().add_artist(curve_legend)
 
-    plt.legend(alpha_handles, alpha_labels, title=r"$\alpha$ (steering strength)",
-            bbox_to_anchor=(1.02, 1), loc="upper left", frameon=True, ncol=1)
+    # plt.legend(alpha_handles, alpha_labels, title=r"$\alpha$ (steering strength)",
+    #         bbox_to_anchor=(1.02, 1), loc="upper left", frameon=True, ncol=2)
 
     plt.grid(True, linestyle="--", alpha=0.35)
     plt.tight_layout()
     plt.savefig(os.path.join("/home/fe/purelku/Desktop/Master_thesis/results_steering_plot",f"{safe_model_name}_perplexity_vs_toxicity.png"), dpi=300, bbox_inches="tight")
+    plt.savefig(os.path.join("/home/fe/purelku/Desktop/Master_thesis/results_steering_plot",f"{safe_model_name}_perplexity_vs_toxicity.svg"),format='svg', dpi=300, bbox_inches="tight")
+
     plt.show()  
     plt.close()
 
@@ -287,12 +334,12 @@ def main(args):
     plt.yscale("log")
     
     plt.tight_layout()
-    plt.savefig(
-        os.path.join("/home/fe/purelku/Desktop/Master_thesis/results_steering_plot",
-                    f"{safe_model_name}_perplexity_vs_toxicity_layer_.png"),
-        dpi=300, bbox_inches="tight"
-    )
-    plt.show()
+    # plt.savefig(
+    #     os.path.join("/home/fe/purelku/Desktop/Master_thesis/results_steering_plot",
+    #                 f"{safe_model_name}_perplexity_vs_toxicity_layer_.png"),
+    #     dpi=300, bbox_inches="tight"
+    # )
+    # plt.show()
     plt.close()
 
 
@@ -345,13 +392,13 @@ def main(args):
     # plt.legend(alpha_handles, alpha_labels, title=r"$\alpha$ (steering strength)",
     #         loc="center right", bbox_to_anchor=(1.02, 0.0), frameon=True, ncol=1)
     plt.tight_layout()    
-    plt.savefig(f"{safe_model_name}_perplexity_vs_toxicity_per_layer.png", dpi=300, bbox_inches="tight")
-    plt.show()
+    # plt.savefig(f"{safe_model_name}_perplexity_vs_toxicity_per_layer.png", dpi=300, bbox_inches="tight")
+    # plt.show()
     plt.close()
 
 ################################################################################################
 
-    plt.figure(figsize=(8, 6))
+    plt.figure(figsize=(4.5, 3.5))
     g = (df.groupby(['layer_name','alpha'], observed=True)
         .agg(tox=('avg_toxicity','median'), ppl=('perplexity','median'))
         .reset_index()
@@ -369,8 +416,8 @@ def main(args):
     plt.xlabel('Average toxicity')
     plt.ylabel('Average perplexity [log scale]')
     plt.tight_layout()
-    plt.savefig(f"{safe_model_name}_perplexity_vs_toxicity_median_trend.png", dpi=300, bbox_inches="tight")
-    plt.show()
+    # plt.savefig(f"{safe_model_name}_perplexity_vs_toxicity_median_trend.png", dpi=300, bbox_inches="tight")
+    # plt.show()
     plt.close()
 
 
@@ -410,10 +457,11 @@ def main(args):
     ax.set_ylabel('Perplexity [log scale]')
     ax.set_title('Perplexity vs. Toxicity (density + α summaries)')
     # ax.set_yscale('log')
-    ax.legend(frameon=False)
+    ax.legend(frameon=False, ncol=2)
     plt.tight_layout()
-    plt.savefig(f"{safe_model_name}_perplexity_vs_toxicity_density.png", dpi=300, bbox_inches="tight")
-    plt.show()
+    # plt.savefig(f"{safe_model_name}_perplexity_vs_toxicity_density.png", dpi=300, bbox_inches="tight")
+
+    # plt.show()
     plt.close()
 
 
@@ -430,17 +478,22 @@ def main(args):
 
 
 if __name__ == "__main__":
-    for i, model in enumerate(["allenai/OLMo-2-0425-1B-SFT", "allenai/OLMo-2-0425-1B-DPO", "allenai/OLMo-2-0425-1B-Instruct", "allenai/OLMo-2-0425-1B", "google/gemma-2-2b-it", "meta-llama/Llama-3.2-3B-Instruct", "google/gemma-2-2b", "meta-llama/Llama-3.2-3B"]): #"google/gemma-2-2b-it",
+    for i, model in enumerate([ "allenai/OLMo-2-0425-1B-Instruct", "allenai/OLMo-2-0425-1B", 
+                               "google/gemma-2-2b-it",  "google/gemma-2-2b", 
+                               "meta-llama/Llama-3.2-3B", "meta-llama/Llama-3.2-3B-Instruct",
+                               "Qwen/Qwen2.5-3B", "Qwen/Qwen2.5-3B-Instruct"]): #"google/gemma-2-2b-it",
     # for i, model in enumerate(["allenai/OLMo-2-0425-1B"]):
         args = parse_args()
         args.model = model
         # alpha = [-0.09, -0.08, -0.07, -0.06, -0.05, -0.04, -0.03, -0.02, -0.01]
         # alpha += [0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09]
 
-        alpha = [-0.5, -1.0, -1.5, -2.0, -2.5, -3.0, -3.5, -4.0, -4.5, -5.0]
-        # alpha += [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4]
-        # alpha += [-0.05, -0.1, -0.15, -0.2, -0.25, -0.3, -0.35, -0.4]
-        alpha += [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]  
+        alpha = [-2.4, -2.2, -1.8, -1.6, -1.4, -1.3, -1.2, -1.1, -0.9, -0.8, -0.7, -0.6, -0.4, -0.3, 
+                -0.2, -0.1, 0.1, 0.2, 0.3, 0.4, 0.6, 0.7, 0.8, 0.9, 1.1, 1.2, 1.3, 1.4, 1.6, 1.8, 2.2, 2.4]
+
+        alpha += [-0.5, -1.0, -1.5, -2.0, -2.5, -3.0, -3.5, -4.0, -4.5, -5.0]
+       
+        alpha += [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0] 
         print(f"Running evaluation for model: {args.model} with alphas: {alpha}")
         args.alpha = alpha
         main(args)
