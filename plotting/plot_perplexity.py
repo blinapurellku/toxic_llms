@@ -87,9 +87,12 @@ def parse_args():
 
 def main(args):
     # args = parse_args()
-
+    m = 'last'  # 'best' or 'last'
     safe_model_name = re.sub(r'[\\/*?:"<>|]', "_", args.model)
     save_dir = os.path.join(args.output_dir, safe_model_name)
+
+    if m == 'last':
+        save_dir = os.path.join(args.output_dir, 'last', safe_model_name)
     # Load JSON
     with open(os.path.join(save_dir, "steered_perplexities.json")) as f:
     # with open(os.path.join(save_dir, "abladed_perplexities_pca.json")) as f:
@@ -141,8 +144,11 @@ def main(args):
     # plt.legend(title=r"$\alpha$ (steering strength)", bbox_to_anchor=(1.05, 1.05), ncol=2)
     # plt.xticks(ordered_l, rotation=45)
     plt.tight_layout()
-    plt.savefig(f"/home/fe/purelku/Desktop/Master_thesis/results_steering_plot/{safe_model_name}_perplexity_results_last_1.png", dpi=300)
-    plt.savefig(f"/home/fe/purelku/Desktop/Master_thesis/results_steering_plot/{safe_model_name}_perplexity_results_last_1.svg", format='svg', dpi=30, bbox_inches='tight')
+    s_file = f"/home/fe/purelku/Desktop/Master_thesis/results_steering_plot/{safe_model_name}_perplexity_results_all"
+    if m == 'last':
+        s_file = f"/home/fe/purelku/Desktop/Master_thesis/results_steering_plot/{safe_model_name}_perplexity_results_last"
+    plt.savefig(s_file + ".png", dpi=300)
+    plt.savefig(s_file + ".svg", format='svg', dpi=30, bbox_inches='tight')
     plt.close()
     
 
@@ -185,19 +191,19 @@ def main(args):
         plt.plot(alphas, perps, label=f"Layer {layer_id}", color=colors[i])
 
     # Step 5: Labels, legend, grid
-    plt.xlabel("Alpha", size=14)
-    # plt.xticks(all_alphas, rotation=45)
-    plt.ylabel("Perplexity [log scale]")
-    plt.yscale("log")
-    plt.title(f"Perplexity {safe_model_name}")
-    plt.grid(True)
-    # plt.legend(fontsize="small", loc="best")
-    plt.tight_layout()
-    plt.savefig(
-        f"/home/fe/purelku/Desktop/Master_thesis/results_steering_plot/{safe_model_name}_perplexity_layer_log_last_1.png",
-        dpi=300
-    )
-    plt.show()
+    # plt.xlabel("Alpha", size=14)
+    # # plt.xticks(all_alphas, rotation=45)
+    # plt.ylabel("Perplexity [log scale]")
+    # plt.yscale("log")
+    # plt.title(f"Perplexity {safe_model_name}")
+    # plt.grid(True)
+    # # plt.legend(fontsize="small", loc="best")
+    # plt.tight_layout()
+    # plt.savefig(
+    #     f"/home/fe/purelku/Desktop/Master_thesis/results_steering_plot/{safe_model_name}_perplexity_layer_log_last_1.png",
+    #     dpi=300
+    # )
+    # plt.show()
 
    
 

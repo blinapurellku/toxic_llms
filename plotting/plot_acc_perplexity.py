@@ -92,6 +92,8 @@ def main(args):
     
     side = 'toxic' # or 'nontoxic' 'toxic'
     save_path = os.path.join(args.output_dir, safe_model_name)
+    if args.m == 'last':
+        save_path = os.path.join(args.output_dir, 'last', safe_model_name)
 
     labels_before = np.load(f"{args.output_dir}/{safe_model_name}/labels.npy")
     valid_lab = [r for r in labels_before if r != -1]
@@ -268,8 +270,11 @@ def main(args):
 
     plt.grid(True, linestyle="--", alpha=0.35)
     plt.tight_layout()
-    plt.savefig(os.path.join("/home/fe/purelku/Desktop/Master_thesis/results_steering_plot",f"{safe_model_name}_perplexity_vs_toxicity.png"), dpi=300, bbox_inches="tight")
-    plt.savefig(os.path.join("/home/fe/purelku/Desktop/Master_thesis/results_steering_plot",f"{safe_model_name}_perplexity_vs_toxicity.svg"),format='svg', dpi=300, bbox_inches="tight")
+    s_file = f"/home/fe/purelku/Desktop/Master_thesis/results_steering_plot/{safe_model_name}_perplexity_vs_toxicity"
+    if args.m == 'last':
+        s_file = f"/home/fe/purelku/Desktop/Master_thesis/results_steering_plot/{safe_model_name}_perplexity_vs_toxicity_last"
+    plt.savefig(s_file + ".png", dpi=300, bbox_inches="tight")
+    plt.savefig(s_file + ".svg", format='svg', dpi=300, bbox_inches="tight")
 
     plt.show()  
     plt.close()
@@ -495,5 +500,6 @@ if __name__ == "__main__":
        
         alpha += [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0] 
         print(f"Running evaluation for model: {args.model} with alphas: {alpha}")
+        args.m = 'last'  # 'best' or 'last'
         args.alpha = alpha
         main(args)
