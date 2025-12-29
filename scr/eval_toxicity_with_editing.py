@@ -177,13 +177,13 @@ def main(args):
 
         if args.dataset == "walledai/HarmBench":
             
-            saved_path = f"{output_dir}/{safe_model_name}/{layer_name}__head_{head_id}_mean_.json.zst"
+            saved_path = f"{output_dir}/{safe_model_name}/{layer_name}__head_{head_id}_mean.json.zst"
 
             data = None
 
         else:
            
-            saved_path = f"{output_dir}/{safe_model_name}/{safe_dataset}__{layer_name}__head_{head_id}_mean_.json.zst"
+            saved_path = f"{output_dir}/{safe_model_name}/{safe_dataset}__{layer_name}__head_{head_id}_mean.json.zst"
             data = safe_dataset
                 
 
@@ -228,7 +228,7 @@ def main(args):
                 prompts_after[mode] = filtered_prompts
 
                 # Save the prompts and responses
-                save_prompts_responses_head(args.output_dir, args.model, data, layer_name, head_id, filtered_prompts, filtered_responses, ablation=ablate)
+                save_prompts_responses_head(output_dir, args.model, data, layer_name, head_id, filtered_prompts, filtered_responses, ablation=ablate)
 
             finally:
                 for h in handle:
@@ -247,89 +247,89 @@ def main(args):
     #     del name2mod[layer_name]._forward_pre_hooks  # Clear hooks if they exist
       
 
-    # if torch.cuda.is_available():
-    #     gc.collect()               
-    #     torch.cuda.empty_cache()
-    #     # Print free and total CUDA memory
+    if torch.cuda.is_available():
+        gc.collect()               
+        torch.cuda.empty_cache()
+        # Print free and total CUDA memory
         
-    #     free_mem = torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated()
-    #     total_mem = torch.cuda.get_device_properties(0).total_memory
-    #     print(f"CUDA Memory: {free_mem / 1024**3:.2f} GB free of {total_mem / 1024**3:.2f} GB total")
+        free_mem = torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated()
+        total_mem = torch.cuda.get_device_properties(0).total_memory
+        print(f"CUDA Memory: {free_mem / 1024**3:.2f} GB free of {total_mem / 1024**3:.2f} GB total")
     
-    # torch.cuda.synchronize()
+    torch.cuda.synchronize()
 
 
-    # print("Classifying responses after steering injection...")
+    print("Classifying responses after steering injection...")
 
     
 
-    # bnb_config_2 = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16)
+    bnb_config_2 = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16)
 
 
-    # if torch.cuda.is_available():
-    #     torch.cuda.empty_cache()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
-    # bnb_config_2 = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16)
-    # cls_model, cls_tokenizer, cls_template, cls_name = load_classifier(args.dataset, device, bnb_config=bnb_config_2)
+    bnb_config_2 = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16)
+    cls_model, cls_tokenizer, cls_template, cls_name = load_classifier(args.dataset, device, bnb_config=bnb_config_2)
     
-    # for mode, responses in responses_after.items():
+    for mode, responses in responses_after.items():
             
-    #     output_dir = f"{args.output_dir}/{mode}"
-    #     os.makedirs(f"{output_dir}/{safe_model_name}", exist_ok=True)
+        output_dir = f"{args.output_dir}/{mode}"
+        os.makedirs(f"{output_dir}/{safe_model_name}", exist_ok=True)
 
-    #     head_id = f'{mode}_top_k_{top_n}_{fil}_lambda_{args.alpha}'
-    #     layer_name = 'all_layers'
+        head_id = f'{mode}_top_k_{top_n}_{fil}_lambda_{args.alpha}'
+        layer_name = 'all_layers'
 
-    #     if args.dataset in "walledai/HarmBench":
+        if args.dataset in "walledai/HarmBench":
            
-    #         save_np = f"{output_dir}/{safe_model_name}/{layer_name}_ablation_head_{head_id}_mean.npy"
-    #     else:
+            save_np = f"{output_dir}/{safe_model_name}/{layer_name}_ablation_head_{head_id}_mean.npy"
+        else:
             
-    #         save_np = f"{output_dir}/{safe_model_name}/{layer_name}_ablation_head_{head_id}_{safe_dataset}_mean.npy"
+            save_np = f"{output_dir}/{safe_model_name}/{layer_name}_ablation_head_{head_id}_{safe_dataset}_mean.npy"
 
 
-    #     if os.path.exists(save_np):
-    #         labels_after = np.load(save_np, allow_pickle=True).item()['labels']
-    #         print(f"Loaded existing labels from {save_np}")
+        if os.path.exists(save_np):
+            labels_after = np.load(save_np, allow_pickle=True).item()['labels']
+            print(f"Loaded existing labels from {save_np}")
 
-    #     else:    
-    #         res = []
-    #         labels_after = {}
+        else:    
+            res = []
+            labels_after = {}
 
 
-    #         cls_results = classify_generation(
-    #                 prompts_after[mode],
-    #                 responses,
-    #                 cls_model,
-    #                 cls_tokenizer,
-    #                 cls_name,
-    #                 args.behavior,
-    #                 templ=cls_template,
-    #                 batch_size=args.batch_size,  #
-    #             )
-    #         print(f"Classified {len(cls_results)} responses.")
-    #         # Average label for quick numeric overview
-    #         valid_lab = [r for r in cls_results if r != -1]
-    #         avg_label = sum(valid_lab) / len(cls_results)
-    #         print(f"Layer {layer_name} classification results:")
-    #         print(f"Mean toxicity label: {avg_label:.3f}, {sum(valid_lab)}/{len(cls_results)} toxic responses")
-    #         # labels_after[layer_name] = np.array(cls_results)
-    #         labels_after ={
-    #                 "labels": np.array(cls_results),
-    #             }
+            cls_results = classify_generation(
+                    prompts_after[mode],
+                    responses,
+                    cls_model,
+                    cls_tokenizer,
+                    cls_name,
+                    args.behavior,
+                    templ=cls_template,
+                    batch_size=args.batch_size,  #
+                )
+            print(f"Classified {len(cls_results)} responses.")
+            # Average label for quick numeric overview
+            valid_lab = [r for r in cls_results if r != -1]
+            avg_label = sum(valid_lab) / len(cls_results)
+            print(f"Layer {layer_name} classification results:")
+            print(f"Mean toxicity label: {avg_label:.3f}, {sum(valid_lab)}/{len(cls_results)} toxic responses")
+            # labels_after[layer_name] = np.array(cls_results)
+            labels_after ={
+                    "labels": np.array(cls_results),
+                }
             
-    #         np.save(save_np, labels_after)
-    #         # np.save(f"{args.output_dir}/{safe_model_name}/labels_steering_{side}_alpha_{alpha}.npy", labels_after)
+            np.save(save_np, labels_after)
+            # np.save(f"{args.output_dir}/{safe_model_name}/labels_steering_{side}_alpha_{alpha}.npy", labels_after)
 
-    #         # print("Results: ", labels_after)
-    #         print(f"Layer {layer_name} head {head_id}: results {avg_label:.3f}, {sum(valid_lab)}/{len(cls_results)} toxic responses")
+            # print("Results: ", labels_after)
+            print(f"Layer {layer_name} head {head_id}: results {avg_label:.3f}, {sum(valid_lab)}/{len(cls_results)} toxic responses")
 
-    # del cls_model, cls_tokenizer
-    # if torch.cuda.is_available():
-    #     gc.collect()               
-    #     torch.cuda.empty_cache()
+    del cls_model, cls_tokenizer
+    if torch.cuda.is_available():
+        gc.collect()               
+        torch.cuda.empty_cache()
     
-# cosine_final = {'Qwen/Qwen2.5-3B': (8, 34), 'Qwen/Qwen2.5-3B-Instruct': (46, 46), 'allenai/OLMo-2-0425-1B-Instruct': (25, 24), 'allenai/OLMo-2-0425-1B': (2, 14), 'google/gemma-2-2b-it': (20, 11), 'meta-llama/Llama-3.2-3B-Instruct': (5, 43), 'google/gemma-2-2b': (15, 20), 'meta-llama/Llama-3.2-3B': (9, 62)}
+cosine_final = {'Qwen/Qwen2.5-3B': (8, 34), 'Qwen/Qwen2.5-3B-Instruct': (46, 46), 'allenai/OLMo-2-0425-1B-Instruct': (25, 24), 'allenai/OLMo-2-0425-1B': (2, 14), 'google/gemma-2-2b-it': (20, 11), 'meta-llama/Llama-3.2-3B-Instruct': (5, 43), 'google/gemma-2-2b': (15, 20), 'meta-llama/Llama-3.2-3B': (9, 62)}
    
 mean_sv_final = {
             'Qwen/Qwen2.5-3B': {'a': 15, 'min_lambda': -2.8, 'min_avg_toxicity': np.float64(0.075), 'max_lambda': 2.8, 'max_avg_toxicity': np.float64(0.65)}, 
