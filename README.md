@@ -3,7 +3,7 @@
 This repository contains the code for my master’s thesis **“Exploring the Effects of Safety Fine-Tuning in LLM Behaviour.”**  
 The project studies how safety fine-tuning changes the internal representations of large language models, and whether harmful behaviours become more structured and controllable after alignment.
 
-The code implements post-hoc activation-level interventions to analyse and manipulate model behaviour without retraining.
+The code implements post-hoc activation level interventions to analyse and manipulate model behaviour without retraining.
 
 ## What’s included
 
