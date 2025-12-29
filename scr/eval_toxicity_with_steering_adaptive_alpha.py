@@ -31,7 +31,8 @@ from transformers import (AutoModelForCausalLM, AutoTokenizer,
 from utils_evaluating_toxicity import classify_generation
 from utils_load_dataset_and_models import load_model_and_tokenizer, load_classifier, load_dataset, classify_models_dict
 from generate_responses import generate_responses
-from utils_hooks import steering_vector_hook
+from utils_hooks import steering_vector_hook_adaptive as steering_vector_hook
+from utils_hooks import PerBatchAlpha
 
 # Optional: avoid error spam from Torch Dynamo
 torch._dynamo.config.suppress_errors = False
@@ -47,104 +48,6 @@ if torch.cuda.is_available():
 # torch.use_deterministic_algorithms(True)
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
-class PerBatchAlpha:
-    """Optional: mutable container if you want to set .value before each batch."""
-    def __init__(self, value=1.0):
-        self.value = value
-
-def steering_vector_hook(
-    module: torch.nn.Module,
-    steer: torch.Tensor,
-    alpha: Any = 1.0,          # <- can be "whatever" (scalar/seq/callable/iterator/custom)
-    mode: str = "add",
-) -> torch.utils.hooks.RemovableHandle:
-    """
-    Add `alpha * steer` to the module output.
-    `alpha` can be:
-      - scalar (int/float)
-      - sequence/array of length B
-      - callable(**ctx) -> scalar or length-B
-      - iterator/generator yielding scalar or length-B per call
-      - object with .get_for_batch(B, **ctx) -> scalar or length-B
-      - PerBatchAlpha (uses .value)
-    If mode == 'last', only last token is modified.
-    """
-
-    steer = steer.detach()
-
-    def _coerce_alpha(alpha_in, *, B, device, dtype, ctx):
-        """Turn 'whatever' into a tensor of shape (B,1,1) (broadcastable)."""
-        # 1) Unwrap PerBatchAlpha
-        if isinstance(alpha_in, PerBatchAlpha):
-            alpha_in = alpha_in.value
-
-        # 2) Callable: let it compute α for this forward
-        if callable(alpha_in):
-            alpha_in = alpha_in(**ctx)  # may return scalar or length-B
-
-        # 3) Iterator/generator: pull next value
-        elif hasattr(alpha_in, "__next__"):
-            alpha_in = next(alpha_in)
-
-        # 4) Custom provider with get_for_batch
-        elif hasattr(alpha_in, "get_for_batch"):
-            alpha_in = alpha_in.get_for_batch(B, **ctx)
-
-        # 5) Now normalize to tensor
-        try:
-            a = torch.as_tensor(alpha_in, device=device, dtype=dtype)
-        except Exception:
-            # Last resort: treat as scalar via float(...)
-            a = torch.tensor(float(alpha_in), device=device, dtype=dtype)
-
-        # Shapes: () or (B,) are most common. We reshape to (B,1,1).
-        if a.ndim == 0:
-            a = a.view(1).expand(B)         # (B,)
-        if a.ndim == 1:
-            if a.numel() == 1:
-                a = a.expand(B)             # (B,)
-            elif a.numel() != B:
-                raise ValueError(f"alpha length {a.numel()} != batch size {B}")
-            a = a.view(B, 1, 1)             # (B,1,1)
-        elif a.ndim == 3:
-            # Accept (B,1,1), (B,L,1), (1,1,1) etc. Basic sanity check:
-            if a.shape[0] not in (1, B):
-                raise ValueError(f"alpha first dim {a.shape[0]} != batch size {B} (or 1)")
-        else:
-            raise ValueError("alpha must be scalar, 1D length B, or broadcastable 3D")
-
-        return a
-
-    def _hook(_m, _inp, out):
-        # Handle HF tuple outputs
-        x = out[0] if isinstance(out, tuple) else out    # (B, L, H)
-        B, L, H = x.shape
-
-        # Broadcast steer to (1,1,H) if 1D
-        add = steer
-        if steer.ndim == 1:
-            add = steer.unsqueeze(0).unsqueeze(0)        # (1,1,H)
-        add = add.to(x.device, x.dtype)
-
-        # Context you might find useful in callable/providers
-        ctx = {
-            "B": B, "L": L, "H": H,
-            "device": x.device, "dtype": x.dtype,
-            "inp": _inp, "out": out,
-        }
-        a = _coerce_alpha(alpha, B=B, device=x.device, dtype=x.dtype, ctx=ctx)  # (B,1,1) or broadcastable
-
-        if mode == 'last':
-            x_last = x[:, -1:]                 # (B,1,H)
-            mod_last = x_last + a * add        # (B,1,H)
-            mod = torch.cat([x[:, :-1], mod_last], dim=1)
-        else:
-            mod = x + a * add                  # (B,L,H) + (B,1,1)*(1,1,H)
-
-        return (mod,) + out[1:] if isinstance(out, tuple) else mod
-
-    return module.register_forward_hook(_hook)
 
 
    

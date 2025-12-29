@@ -33,8 +33,9 @@ import math
 from utils_evaluating_toxicity import classify_generation
 from utils_load_dataset_and_models import load_model_and_tokenizer, load_classifier, load_dataset, classify_models_dict
 from generate_responses import generate_responses
-from utils_hooks import steering_vector_hook, ablation_hook, register_head_ablation
-from utils_ablation import get_ablation_heads, get_editing_heads
+from utils_hooks import register_head_ablation
+from utils_editing import get_editing_heads
+from utils_perplexity import perplexity_prompts
 
 
 # Optional: avoid error spam from Torch Dynamo
@@ -51,100 +52,6 @@ if torch.cuda.is_available():
 # torch.use_deterministic_algorithms(True)
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
-
-
-@torch.no_grad()
-def perplexity_prompts(model, tokenizer, prompts, template, base_model, starting_bs=32):
-    # model.eval() - is in eval mode
-    # total_nll, total_tokens = 0.0, 0
-
-    @find_executable_batch_size(starting_batch_size=starting_bs)
-    def _ppl_batch(batch_size):
-        # nonlocal total_nll, total_tokens
-        total_nll, total_tokens = 0.0, 0
-        for i in range(0, len(prompts), batch_size):
-            chunk = prompts[i : i + batch_size]
-            if base_model:
-                wrapped = chunk
-            else:
-                if template is None:
-                    raise ValueError(
-                        "A chat template must be supplied when base_model=False"
-                    )
-                wrapped = [template["prompt"].format(instruction=p) for p in chunk]
-
-            enc = tokenizer(wrapped, return_tensors="pt", padding=True, truncation=True).to(model.device)
-            labels = enc.input_ids.clone()
-            labels[labels == tokenizer.pad_token_id] = -100  # ignore pads
-            with torch.inference_mode():
-                out = model(**enc, labels=labels)
-
-            valid_tokens = (labels != -100).sum().item()
-            nll = out.loss.item() * valid_tokens
-            total_nll += nll
-            total_tokens += valid_tokens
-
-            # nll = out.loss.item() * enc.input_ids.numel()
-            # total_nll += nll
-            # total_tokens += enc.input_ids.numel()
-
-            del enc, out
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        return total_nll, total_tokens
-
-    total_nll, total_tokens = _ppl_batch()
-    return math.exp(total_nll / total_tokens)
-
-
-@torch.no_grad()
-def perplexity_generated(model, tokenizer, prompts, generations, starting_bs=32, device="cuda"):
-    assert len(prompts) == len(generations), "Mismatch: prompts and generations must be same length"
-    model.eval()
-    total_nll, total_tokens = 0.0, 0
-
-    @find_executable_batch_size(starting_batch_size=starting_bs)
-    def _ppl_batch(batch_size):
-        # nonlocal total_nll, total_tokens
-        total_nll, total_tokens = 0.0, 0
-        for i in range(0, len(prompts), batch_size):
-            batch_prompts = prompts[i : i + batch_size]
-            batch_gens = generations[i : i + batch_size]
-
-            # full text (prompt+gen)
-            enc_full = tokenizer(
-                [p + g for p, g in zip(batch_prompts, batch_gens)],
-                return_tensors="pt", padding=True, truncation=True
-            ).to(device)
-
-            # prompt lengths
-            enc_prompts = tokenizer(batch_prompts, return_tensors="pt", padding=True, truncation=True).to(device)
-            prompt_lens = (enc_prompts.input_ids != tokenizer.pad_token_id).sum(dim=1).cpu()
-
-            # labels: mask out prompt tokens
-            labels = enc_full.input_ids.clone()
-            for j, L in enumerate(prompt_lens):
-                labels[j, :L] = -100
-
-            with torch.inference_mode():
-                out = model(input_ids=enc_full.input_ids,
-                            attention_mask=enc_full.attention_mask,
-                            labels=labels)
-
-            valid_tokens = (labels != -100).sum().item()
-            nll = out.loss.item() * valid_tokens
-            total_nll += nll
-            total_tokens += valid_tokens
-
-            del enc_full, enc_prompts, out
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        return total_nll, total_tokens
-
-    total_nll, total_tokens = _ppl_batch()
-    return math.exp(total_nll / total_tokens)
-
 
 
 

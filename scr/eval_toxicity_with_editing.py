@@ -33,8 +33,8 @@ from transformers import (AutoModelForCausalLM, AutoTokenizer,
 from utils_evaluating_toxicity import classify_generation
 from utils_load_dataset_and_models import load_model_and_tokenizer, load_classifier, load_dataset, classify_models_dict
 from generate_responses import generate_responses
-from utils_hooks import steering_vector_hook, ablation_hook, register_head_ablation
-from utils_ablation import get_ablation_heads, get_editing_heads
+from utils_hooks import register_head_ablation
+from utils_editing import get_editing_heads
 # Optional: avoid error spam from Torch Dynamo
 torch._dynamo.config.suppress_errors = False
 
